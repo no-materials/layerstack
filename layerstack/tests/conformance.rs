@@ -650,3 +650,75 @@ fn specifier_class_is_abstract() {
     assert!(stage.is_defined(prim, &store));
     assert!(stage.is_abstract(prim, &store));
 }
+
+#[test]
+fn value_blocked_suppresses_weaker_opinions() {
+    // Spec: AOUSD Core §12.3 — a `Blocked` value suppresses all weaker opinions.
+    let mut store = InMemoryStore::default();
+
+    let prim = path(&mut store, "/P");
+    let field_x = store.tokens.intern("x");
+
+    // Strongest layer blocks the field.
+    let mut root_layer = Layer {
+        id: LayerId(1),
+        sublayers: vec![LayerId(2)],
+        prims: HashMap::new(),
+    };
+    let mut root_spec = PrimSpec::default();
+    root_spec
+        .fields
+        .insert(field_x, FieldValue::Value(Value::Blocked));
+    root_layer.prims.insert(prim, root_spec);
+    store.insert_layer(root_layer);
+
+    // Weaker layer provides a real value.
+    let mut sub_layer = Layer {
+        id: LayerId(2),
+        sublayers: vec![],
+        prims: HashMap::new(),
+    };
+    let mut sub_spec = PrimSpec::default();
+    sub_spec
+        .fields
+        .insert(field_x, FieldValue::Value(Value::Int(42)));
+    sub_layer.prims.insert(prim, sub_spec);
+    store.insert_layer(sub_layer);
+
+    let stage = Stage::compose(&mut store, LayerId(1), StageOptions::default());
+
+    // Blocked suppresses weaker opinions — resolve returns None.
+    assert!(stage.resolve_field(prim, field_x).is_none());
+    assert!(stage.resolve_value(prim, field_x).is_none());
+}
+
+#[test]
+fn value_blocked_only_affects_blocked_field() {
+    // Blocking one field should not affect other fields on the same prim.
+    let mut store = InMemoryStore::default();
+
+    let prim = path(&mut store, "/P");
+    let field_x = store.tokens.intern("x");
+    let field_y = store.tokens.intern("y");
+
+    let mut layer = Layer {
+        id: LayerId(1),
+        sublayers: vec![],
+        prims: HashMap::new(),
+    };
+    let mut spec = PrimSpec::default();
+    spec.fields
+        .insert(field_x, FieldValue::Value(Value::Blocked));
+    spec.fields
+        .insert(field_y, FieldValue::Value(Value::Int(99)));
+    layer.prims.insert(prim, spec);
+    store.insert_layer(layer);
+
+    let stage = Stage::compose(&mut store, LayerId(1), StageOptions::default());
+
+    assert!(stage.resolve_field(prim, field_x).is_none());
+    assert_eq!(
+        stage.resolve_field(prim, field_y).expect("y exists").value,
+        Value::Int(99)
+    );
+}

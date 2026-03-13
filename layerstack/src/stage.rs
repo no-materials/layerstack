@@ -148,6 +148,11 @@ impl Stage {
         let strongest = opinions.first()?;
 
         match &strongest.value {
+            FieldValue::Value(Value::Blocked) => {
+                // Value block: suppress all weaker opinions, return no value.
+                // Spec: AOUSD Core §12.3 (value blocking).
+                None
+            }
             FieldValue::Value(v) => Some(Resolved {
                 value: ResolvedValue::Scalar(v.clone()),
                 provenance: self.provenance_for(field, strongest),

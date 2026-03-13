@@ -57,6 +57,13 @@ pub enum Value {
         /// The opaque payload.
         bytes: Arc<[u8]>,
     },
+    /// Value block sentinel — suppresses weaker opinions.
+    ///
+    /// When encountered during value resolution, all weaker opinions are
+    /// skipped and the fallback value is returned instead.
+    ///
+    /// Spec: AOUSD Core §12.3 (value blocking), §16.3.10.16 (`ValueBlock` type).
+    Blocked,
 }
 
 /// A field value stored on a prim spec.
