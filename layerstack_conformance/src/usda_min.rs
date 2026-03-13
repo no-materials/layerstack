@@ -130,6 +130,8 @@ struct PrimDef {
     string_attrs: Vec<String>,
     references: ReferencesDef,
     inherits: InheritsDef,
+    specializes: SpecializesDef,
+    payloads: PayloadsDef,
     targets: TargetsDef,
     declares_targets: bool,
     prim_order: Option<Vec<String>>,
@@ -156,6 +158,20 @@ struct InheritsDef {
 }
 
 #[derive(Clone, Debug, Default)]
+struct SpecializesDef {
+    explicit: Option<Vec<String>>,
+    prepend: Vec<String>,
+    append: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct PayloadsDef {
+    explicit: Option<Vec<ReferenceSpec>>,
+    prepend: Vec<ReferenceSpec>,
+    append: Vec<ReferenceSpec>,
+}
+
+#[derive(Clone, Debug, Default)]
 struct TargetsDef {
     explicit: Option<Vec<String>>,
     prepend: Vec<String>,
@@ -167,6 +183,8 @@ struct PendingPrim {
     name: String,
     references: ReferencesDef,
     inherits: InheritsDef,
+    specializes: SpecializesDef,
+    payloads: PayloadsDef,
 }
 
 fn parse_sublayers(text: &str, base_dir: &Path) -> Vec<PathBuf> {
@@ -239,20 +257,60 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                 name: name.to_string(),
                 references: ReferencesDef::default(),
                 inherits: InheritsDef::default(),
+                specializes: SpecializesDef::default(),
+                payloads: PayloadsDef::default(),
             });
         }
 
         if line.contains('(')
             && let Some(pending) = pending.as_mut()
         {
-            while let Some(spec_line) = lines.peek() {
-                let spec_line = spec_line.trim();
-                if spec_line.starts_with(')') {
-                    // Leave the closing line (often `) {`) in the stream so
-                    // the main loop can observe the `{` and open the prim scope.
-                    break;
+            // Collect metadata lines. If the opening `(` and closing `)` are on
+            // the same line (inline metadata), extract the content between them.
+            // Otherwise, read subsequent lines until we find a line starting with `)`.
+            //
+            // Multi-line arrays like `payload = [\n @a@, \n @b@ \n]` are joined
+            // into a single logical line before parsing.
+            let mut meta_lines: Vec<String> = Vec::new();
+            if let (Some(open), Some(close)) = (line.find('('), line.rfind(')')) {
+                if close > open {
+                    // Inline metadata: extract content between ( and )
+                    let inline = line[open + 1..close].trim();
+                    if !inline.is_empty() {
+                        meta_lines.push(inline.to_string());
+                    }
                 }
-                let _ = lines.next();
+            } else {
+                // Multi-line metadata: read until `)`.
+                let mut accumulator: Option<String> = None;
+                while let Some(spec_line) = lines.peek() {
+                    let spec_line = spec_line.trim();
+                    if spec_line.starts_with(')') {
+                        break;
+                    }
+                    let consumed = lines.next().unwrap().trim().to_string();
+
+                    // Handle multi-line arrays: accumulate lines between `[` and `]`.
+                    if let Some(ref mut acc) = accumulator {
+                        acc.push(' ');
+                        acc.push_str(&consumed);
+                        if consumed.contains(']') {
+                            meta_lines.push(acc.clone());
+                            accumulator = None;
+                        }
+                    } else if consumed.contains('[') && !consumed.contains(']') {
+                        accumulator = Some(consumed);
+                    } else {
+                        meta_lines.push(consumed);
+                    }
+                }
+                // Flush any unclosed accumulator.
+                if let Some(acc) = accumulator {
+                    meta_lines.push(acc);
+                }
+            }
+
+            for spec_line in &meta_lines {
                 if let Some((op, specs)) = parse_references_line(spec_line) {
                     match op {
                         RefOp::Explicit => pending.references.explicit = Some(specs),
@@ -265,6 +323,20 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                         InheritOp::Explicit => pending.inherits.explicit = Some(specs),
                         InheritOp::Prepend => pending.inherits.prepend.extend(specs),
                         InheritOp::Append => pending.inherits.append.extend(specs),
+                    }
+                }
+                if let Some((op, specs)) = parse_specializes_line(spec_line) {
+                    match op {
+                        InheritOp::Explicit => pending.specializes.explicit = Some(specs),
+                        InheritOp::Prepend => pending.specializes.prepend.extend(specs),
+                        InheritOp::Append => pending.specializes.append.extend(specs),
+                    }
+                }
+                if let Some((op, specs)) = parse_payloads_line(spec_line) {
+                    match op {
+                        RefOp::Explicit => pending.payloads.explicit = Some(specs),
+                        RefOp::Prepend => pending.payloads.prepend.extend(specs),
+                        RefOp::Append => pending.payloads.append.extend(specs),
                     }
                 }
             }
@@ -316,6 +388,8 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                             string_attrs: Vec::new(),
                             references: pending.references,
                             inherits: pending.inherits,
+                            specializes: pending.specializes,
+                            payloads: pending.payloads,
                             targets: TargetsDef::default(),
                             declares_targets: false,
                             prim_order: None,
@@ -501,6 +575,55 @@ fn parse_rel_targets_line(line: &str) -> Option<(TargetOp, Vec<String>)> {
     Some((op, specs))
 }
 
+fn parse_specializes_line(line: &str) -> Option<(InheritOp, Vec<String>)> {
+    let line = line.trim().trim_end_matches(',').trim();
+    if line.is_empty() {
+        return None;
+    }
+
+    let (op, rest) = if let Some(rest) = line.strip_prefix("prepend specializes") {
+        (InheritOp::Prepend, rest)
+    } else if let Some(rest) = line.strip_prefix("append specializes") {
+        (InheritOp::Append, rest)
+    } else if let Some(rest) = line.strip_prefix("add specializes") {
+        (InheritOp::Append, rest)
+    } else if let Some(rest) = line.strip_prefix("specializes") {
+        (InheritOp::Explicit, rest)
+    } else {
+        return None;
+    };
+
+    let rhs = rest.split_once('=').map(|(_, rhs)| rhs.trim())?;
+    let specs = parse_path_list_rhs(rhs)?;
+    Some((op, specs))
+}
+
+fn parse_payloads_line(line: &str) -> Option<(RefOp, Vec<ReferenceSpec>)> {
+    let line = line.trim().trim_end_matches(',').trim();
+    if line.is_empty() {
+        return None;
+    }
+
+    let (op, rest) = if let Some(rest) = line.strip_prefix("prepend payload") {
+        (RefOp::Prepend, rest)
+    } else if let Some(rest) = line.strip_prefix("append payload") {
+        (RefOp::Append, rest)
+    } else if let Some(rest) = line.strip_prefix("add payload") {
+        (RefOp::Append, rest)
+    } else if let Some(rest) = line.strip_prefix("payload") {
+        (RefOp::Explicit, rest)
+    } else {
+        return None;
+    };
+
+    // Strip trailing 's' from "payloads" if present (keyword may be "payload" or "payloads").
+    let rest = rest.strip_prefix('s').unwrap_or(rest);
+
+    let rhs = rest.split_once('=').map(|(_, rhs)| rhs.trim())?;
+    let specs = parse_reference_rhs(rhs)?;
+    Some((op, specs))
+}
+
 fn parse_path_list_rhs(rhs: &str) -> Option<Vec<String>> {
     let rhs = rhs.trim();
     if rhs.starts_with('[') {
@@ -657,6 +780,18 @@ fn resolve_inherits_listop(
     resolve_path_listop(&targets, store)
 }
 
+fn resolve_specializes_listop(
+    list: &SpecializesDef,
+    store: &mut InMemoryStore,
+) -> ListOp<layerstack::PathId> {
+    let targets = TargetsDef {
+        explicit: list.explicit.clone(),
+        prepend: list.prepend.clone(),
+        append: list.append.clone(),
+    };
+    resolve_path_listop(&targets, store)
+}
+
 fn resolve_reference_spec(
     spec: &ReferenceSpec,
     base_dir: &Path,
@@ -785,6 +920,20 @@ fn load_layer_with_prims(
             layer_names,
         );
         spec.inherits = resolve_inherits_listop(&prim.inherits, store);
+        spec.specializes = resolve_specializes_listop(&prim.specializes, store);
+        spec.payloads = resolve_references(
+            &ReferencesDef {
+                explicit: prim.payloads.explicit,
+                prepend: prim.payloads.prepend,
+                append: prim.payloads.append,
+            },
+            path.parent().unwrap_or(Path::new(".")),
+            root_dir,
+            store,
+            next_layer_id,
+            by_path,
+            layer_names,
+        );
         spec.prim_order = prim
             .prim_order
             .as_ref()

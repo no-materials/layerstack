@@ -7,7 +7,7 @@
 //! - Layer stacks (recursive sublayers, deterministic strength)
 //! - Stage population (a composed prim tree)
 //! - Value resolution (scalar + `ListOp`)
-//! - Minimal composition arcs for v0.1 (variants + references)
+//! - Composition arcs: local, inherits, variants, references, payloads, specializes
 //!
 //! This crate is `no_std` by default.
 

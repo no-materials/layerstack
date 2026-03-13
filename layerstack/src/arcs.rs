@@ -72,3 +72,45 @@ pub(crate) fn resolve_references_for_prim(
     }
     resolve_list_chain::<Reference>(&[], ops)
 }
+
+/// Resolves the specializes arc list for a prim across the layer stack.
+///
+/// Spec: AOUSD Core §10 (specializes arc, §5.1.33).
+pub(crate) fn resolve_specializes_for_prim(
+    store: &dyn LayerStore,
+    local_stack: &LayerStack,
+    prim: PathId,
+) -> Vec<PathId> {
+    let mut ops = Vec::new();
+    for layer_id in &local_stack.layers {
+        let Some(layer) = store.layer(*layer_id) else {
+            continue;
+        };
+        let Some(spec) = layer.prims.get(&prim) else {
+            continue;
+        };
+        ops.push(spec.specializes.clone());
+    }
+    resolve_list_chain::<PathId>(&[], ops)
+}
+
+/// Resolves the payloads arc list for a prim across the layer stack.
+///
+/// Spec: AOUSD Core §10 (payloads arc, §5.1.22).
+pub(crate) fn resolve_payloads_for_prim(
+    store: &dyn LayerStore,
+    local_stack: &LayerStack,
+    prim: PathId,
+) -> Vec<Reference> {
+    let mut ops = Vec::new();
+    for layer_id in &local_stack.layers {
+        let Some(layer) = store.layer(*layer_id) else {
+            continue;
+        };
+        let Some(spec) = layer.prims.get(&prim) else {
+            continue;
+        };
+        ops.push(spec.payloads.clone());
+    }
+    resolve_list_chain::<Reference>(&[], ops)
+}

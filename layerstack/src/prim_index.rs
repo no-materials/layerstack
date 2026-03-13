@@ -22,7 +22,7 @@ use crate::{
 pub enum ArcKind {
     /// Local opinions from the layer stack.
     Local,
-    /// Inherits arc (not implemented in v0.1).
+    /// Inherits arc.
     Inherits,
     /// Variants arc.
     Variants,
@@ -30,9 +30,9 @@ pub enum ArcKind {
     Relocates,
     /// References arc.
     References,
-    /// Payloads arc (not implemented in v0.1).
+    /// Payloads arc.
     Payloads,
-    /// Specializes arc (not implemented in v0.1).
+    /// Specializes arc.
     Specializes,
 }
 

@@ -13,7 +13,8 @@ use hashbrown::{HashMap, HashSet};
 
 use crate::{
     arcs::{
-        resolve_inherits_for_prim, resolve_references_for_prim, resolve_variant_selections_for_prim,
+        resolve_inherits_for_prim, resolve_payloads_for_prim, resolve_references_for_prim,
+        resolve_specializes_for_prim, resolve_variant_selections_for_prim,
     },
     doc::{FieldValue, LayerId, LayerStore, Reference},
     interner::TokenId,
@@ -61,6 +62,22 @@ pub fn compose_stage(store: &mut dyn LayerStore, root: LayerId, options: StageOp
         &mut authored_children_opinions,
     );
     add_reference_opinions(
+        store,
+        &layer_stack,
+        &paths,
+        &mut prims,
+        &mut prim_order_opinions,
+        &mut authored_children_opinions,
+    );
+    add_payload_opinions(
+        store,
+        &layer_stack,
+        &paths,
+        &mut prims,
+        &mut prim_order_opinions,
+        &mut authored_children_opinions,
+    );
+    add_specializes_opinions(
         store,
         &layer_stack,
         &paths,
@@ -231,6 +248,7 @@ fn add_reference_opinions(
     // recursively so that nested references contribute opinions.
     let mut visited: HashSet<(PathId, LayerId, PathId)> = HashSet::new();
     let mut visited_inherits: HashSet<(PathId, PathId)> = HashSet::new();
+    let mut visited_specializes: HashSet<(PathId, PathId)> = HashSet::new();
     for dest_root in paths.iter().copied() {
         let refs = resolve_references_for_prim(store, local_stack, dest_root);
         for (arc_list_index, reference) in refs.into_iter().enumerate() {
@@ -247,6 +265,7 @@ fn add_reference_opinions(
                 out,
                 &mut visited,
                 &mut visited_inherits,
+                &mut visited_specializes,
                 prim_order_out,
                 authored_children_out,
             );
@@ -582,6 +601,7 @@ fn add_reference_edge_opinions(
     out: &mut HashMap<PathId, PrimIndex>,
     visited: &mut HashSet<(PathId, LayerId, PathId)>,
     visited_inherits: &mut HashSet<(PathId, PathId)>,
+    visited_specializes: &mut HashSet<(PathId, PathId)>,
     prim_order_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
     authored_children_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
 ) {
@@ -774,9 +794,13 @@ fn add_reference_edge_opinions(
             let nested_index = u16::try_from(nested_index).unwrap_or(u16::MAX);
             let namespace_depth =
                 u16::try_from(store.paths().resolve(dest_path_id).depth()).unwrap_or(u16::MAX);
+            // Pass combined_stack so that nested references can discover
+            // opinions from intermediate reference layers (e.g. inherits and
+            // specializes arcs that resolve paths defined in the parent
+            // reference's layer).
             add_reference_edge_opinions(
                 store,
-                stage_stack,
+                &combined_stack,
                 dest_path_id,
                 nested_ref,
                 namespace_depth,
@@ -784,6 +808,640 @@ fn add_reference_edge_opinions(
                 out,
                 visited,
                 visited_inherits,
+                visited_specializes,
+                prim_order_out,
+                authored_children_out,
+            );
+        }
+
+        // Handle nested payloads inside referenced content.
+        let nested_payloads = resolve_payloads_for_prim(store, &remote_stack, remote_path_id);
+        for (nested_index, nested_payload) in nested_payloads.into_iter().enumerate() {
+            let nested_index = u16::try_from(nested_index).unwrap_or(u16::MAX);
+            let namespace_depth =
+                u16::try_from(store.paths().resolve(dest_path_id).depth()).unwrap_or(u16::MAX);
+            add_payload_edge_opinions(
+                store,
+                &combined_stack,
+                dest_path_id,
+                nested_payload,
+                namespace_depth,
+                nested_index,
+                out,
+                visited,
+                visited_inherits,
+                visited_specializes,
+                prim_order_out,
+                authored_children_out,
+            );
+        }
+
+        // Handle nested specializes inside referenced content.
+        //
+        // Spec: AOUSD Core §10 (specializes arcs within referenced layers
+        // contribute opinions at the Specializes position, nested under
+        // the References arc).
+        let specializes = resolve_specializes_for_prim(store, &remote_stack, remote_path_id);
+        for (spec_index, specialized_root) in specializes.into_iter().enumerate() {
+            let spec_index = u16::try_from(spec_index).unwrap_or(u16::MAX);
+            let namespace_depth =
+                u16::try_from(store.paths().resolve(dest_path_id).depth()).unwrap_or(u16::MAX);
+
+            let translated =
+                remap_path_id(store, &dest_root_path, &target_root, specialized_root);
+            if translated != specialized_root {
+                add_specializes_edge_opinions(
+                    store,
+                    stage_stack,
+                    dest_path_id,
+                    translated,
+                    Some(ArcKind::References),
+                    namespace_depth,
+                    spec_index,
+                    out,
+                    visited_specializes,
+                    prim_order_out,
+                    authored_children_out,
+                );
+            }
+
+            add_specializes_edge_opinions(
+                store,
+                &combined_stack,
+                dest_path_id,
+                specialized_root,
+                Some(ArcKind::References),
+                namespace_depth,
+                spec_index,
+                out,
+                visited_specializes,
+                prim_order_out,
+                authored_children_out,
+            );
+        }
+    }
+}
+
+fn add_payload_opinions(
+    store: &mut dyn LayerStore,
+    local_stack: &LayerStack,
+    paths: &BTreeSet<PathId>,
+    out: &mut HashMap<PathId, PrimIndex>,
+    prim_order_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+    authored_children_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+) {
+    // Spec: AOUSD Core §10 (payloads arc, §5.1.22). Payloads are structurally
+    // identical to references for composition purposes but sit at a weaker
+    // position in LIVERPS (between References and Specializes).
+    let mut visited: HashSet<(PathId, LayerId, PathId)> = HashSet::new();
+    let mut visited_inherits: HashSet<(PathId, PathId)> = HashSet::new();
+    let mut visited_specializes: HashSet<(PathId, PathId)> = HashSet::new();
+    for dest_root in paths.iter().copied() {
+        let payloads = resolve_payloads_for_prim(store, local_stack, dest_root);
+        for (arc_list_index, payload) in payloads.into_iter().enumerate() {
+            let arc_list_index = u16::try_from(arc_list_index).unwrap_or(u16::MAX);
+            let namespace_depth =
+                u16::try_from(store.paths().resolve(dest_root).depth()).unwrap_or(u16::MAX);
+            add_payload_edge_opinions(
+                store,
+                local_stack,
+                dest_root,
+                payload,
+                namespace_depth,
+                arc_list_index,
+                out,
+                &mut visited,
+                &mut visited_inherits,
+                &mut visited_specializes,
+                prim_order_out,
+                authored_children_out,
+            );
+        }
+    }
+}
+
+fn add_payload_edge_opinions(
+    store: &mut dyn LayerStore,
+    stage_stack: &LayerStack,
+    dest_root: PathId,
+    reference: Reference,
+    namespace_depth: u16,
+    arc_list_index: u16,
+    out: &mut HashMap<PathId, PrimIndex>,
+    visited: &mut HashSet<(PathId, LayerId, PathId)>,
+    visited_inherits: &mut HashSet<(PathId, PathId)>,
+    visited_specializes: &mut HashSet<(PathId, PathId)>,
+    prim_order_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+    authored_children_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+) {
+    // Payloads mirror reference edge opinions with ArcKind::Payloads.
+    if !out.contains_key(&dest_root) {
+        return;
+    }
+    if !visited.insert((dest_root, reference.layer, reference.prim_path)) {
+        return;
+    }
+
+    let remote_stack = LayerStack::gather(store, reference.layer);
+    let combined_stack = LayerStack {
+        layers: stage_stack
+            .layers
+            .iter()
+            .copied()
+            .chain(remote_stack.layers.iter().copied())
+            .collect(),
+    };
+    let target_root = store.paths().resolve(reference.prim_path).clone();
+    let dest_root_path = store.paths().resolve(dest_root).clone();
+
+    let mut remote_paths: Vec<PathId> = remote_stack
+        .layers
+        .iter()
+        .filter_map(|id| store.layer(*id))
+        .flat_map(|layer| layer.prims.keys().copied())
+        .collect();
+    remote_paths.sort_by(|a, b| {
+        store
+            .paths()
+            .resolve(*a)
+            .cmp_with_tokens(store.paths().resolve(*b), store.tokens())
+    });
+    remote_paths.dedup();
+
+    let mut mapping: Vec<(PathId, PathId)> = Vec::new();
+    for remote_path_id in remote_paths {
+        let rel: Vec<_> = {
+            let remote_path = store.paths().resolve(remote_path_id);
+            let Some(rel) = remote_path.strip_prefix(&target_root) else {
+                continue;
+            };
+            rel.to_vec()
+        };
+        let dest_path_id = store.paths_mut().intern(dest_root_path.join(&rel));
+        if out.contains_key(&dest_path_id) {
+            mapping.push((remote_path_id, dest_path_id));
+        }
+    }
+
+    for (layer_strength, remote_layer_id) in remote_stack.layers.iter().copied().enumerate() {
+        let layer_strength = u16::try_from(layer_strength).unwrap_or(u16::MAX);
+        let Some(remote_layer) = store.layer(remote_layer_id) else {
+            continue;
+        };
+
+        let mut pending_sources = Vec::new();
+        for (remote_path_id, dest_path_id) in &mapping {
+            let Some(remote_spec) = remote_layer.prims.get(remote_path_id) else {
+                continue;
+            };
+            pending_sources.push((
+                *dest_path_id,
+                OpinionKey {
+                    is_local: false,
+                    arc_kind: ArcKind::Payloads,
+                    nested_arc_kind: None,
+                    namespace_depth,
+                    authored: true,
+                    arc_list_index,
+                    layer_strength,
+                    layer_id: remote_layer_id,
+                    spec_path: *remote_path_id,
+                },
+            ));
+
+            for (field, value) in &remote_spec.fields {
+                out.get_mut(dest_path_id)
+                    .expect("path exists")
+                    .add_opinion(Opinion {
+                        key: OpinionKey {
+                            is_local: false,
+                            arc_kind: ArcKind::Payloads,
+                            nested_arc_kind: None,
+                            namespace_depth,
+                            authored: true,
+                            arc_list_index,
+                            layer_strength,
+                            layer_id: remote_layer_id,
+                            spec_path: *remote_path_id,
+                        },
+                        field: *field,
+                        value: value.clone(),
+                    });
+            }
+
+            if let Some(order) = &remote_spec.prim_order {
+                prim_order_out.entry(*dest_path_id).or_default().push((
+                    OpinionKey {
+                        is_local: false,
+                        arc_kind: ArcKind::Payloads,
+                        nested_arc_kind: None,
+                        namespace_depth,
+                        authored: true,
+                        arc_list_index,
+                        layer_strength,
+                        layer_id: remote_layer_id,
+                        spec_path: *remote_path_id,
+                    },
+                    order.clone(),
+                ));
+            }
+
+            if !remote_spec.authored_children.is_empty() {
+                authored_children_out
+                    .entry(*dest_path_id)
+                    .or_default()
+                    .push((
+                        OpinionKey {
+                            is_local: false,
+                            arc_kind: ArcKind::Payloads,
+                            nested_arc_kind: None,
+                            namespace_depth,
+                            authored: true,
+                            arc_list_index,
+                            layer_strength,
+                            layer_id: remote_layer_id,
+                            spec_path: *remote_path_id,
+                        },
+                        remote_spec.authored_children.clone(),
+                    ));
+            }
+        }
+
+        for (dest_path_id, key) in pending_sources {
+            out.get_mut(&dest_path_id)
+                .expect("path exists")
+                .add_source(key);
+        }
+    }
+
+    // Handle nested arcs inside payload targets.
+    for (remote_path_id, dest_path_id) in mapping {
+        let inherits = resolve_inherits_for_prim(store, &remote_stack, remote_path_id);
+        for (inherit_index, inherited_root) in inherits.into_iter().enumerate() {
+            let inherit_index = u16::try_from(inherit_index).unwrap_or(u16::MAX);
+            let namespace_depth =
+                u16::try_from(store.paths().resolve(dest_path_id).depth()).unwrap_or(u16::MAX);
+
+            let translated = remap_path_id(store, &dest_root_path, &target_root, inherited_root);
+            if translated != inherited_root {
+                add_inherit_edge_opinions(
+                    store,
+                    stage_stack,
+                    dest_path_id,
+                    translated,
+                    Some(ArcKind::Payloads),
+                    namespace_depth,
+                    inherit_index,
+                    out,
+                    visited_inherits,
+                    prim_order_out,
+                    authored_children_out,
+                );
+            }
+
+            add_inherit_edge_opinions(
+                store,
+                &combined_stack,
+                dest_path_id,
+                inherited_root,
+                Some(ArcKind::Payloads),
+                namespace_depth,
+                inherit_index,
+                out,
+                visited_inherits,
+                prim_order_out,
+                authored_children_out,
+            );
+        }
+
+        let nested = resolve_references_for_prim(store, &remote_stack, remote_path_id);
+        for (nested_index, nested_ref) in nested.into_iter().enumerate() {
+            let nested_index = u16::try_from(nested_index).unwrap_or(u16::MAX);
+            let namespace_depth =
+                u16::try_from(store.paths().resolve(dest_path_id).depth()).unwrap_or(u16::MAX);
+            add_reference_edge_opinions(
+                store,
+                &combined_stack,
+                dest_path_id,
+                nested_ref,
+                namespace_depth,
+                nested_index,
+                out,
+                visited,
+                visited_inherits,
+                visited_specializes,
+                prim_order_out,
+                authored_children_out,
+            );
+        }
+
+        // Handle nested payloads inside payload targets.
+        let nested_payloads = resolve_payloads_for_prim(store, &remote_stack, remote_path_id);
+        for (nested_index, nested_payload) in nested_payloads.into_iter().enumerate() {
+            let nested_index = u16::try_from(nested_index).unwrap_or(u16::MAX);
+            let namespace_depth =
+                u16::try_from(store.paths().resolve(dest_path_id).depth()).unwrap_or(u16::MAX);
+            add_payload_edge_opinions(
+                store,
+                &combined_stack,
+                dest_path_id,
+                nested_payload,
+                namespace_depth,
+                nested_index,
+                out,
+                visited,
+                visited_inherits,
+                visited_specializes,
+                prim_order_out,
+                authored_children_out,
+            );
+        }
+
+        // Handle nested specializes inside payload targets.
+        let specializes = resolve_specializes_for_prim(store, &remote_stack, remote_path_id);
+        for (spec_index, specialized_root) in specializes.into_iter().enumerate() {
+            let spec_index = u16::try_from(spec_index).unwrap_or(u16::MAX);
+            let namespace_depth =
+                u16::try_from(store.paths().resolve(dest_path_id).depth()).unwrap_or(u16::MAX);
+
+            let translated =
+                remap_path_id(store, &dest_root_path, &target_root, specialized_root);
+            if translated != specialized_root {
+                add_specializes_edge_opinions(
+                    store,
+                    stage_stack,
+                    dest_path_id,
+                    translated,
+                    Some(ArcKind::Payloads),
+                    namespace_depth,
+                    spec_index,
+                    out,
+                    visited_specializes,
+                    prim_order_out,
+                    authored_children_out,
+                );
+            }
+
+            add_specializes_edge_opinions(
+                store,
+                &combined_stack,
+                dest_path_id,
+                specialized_root,
+                Some(ArcKind::Payloads),
+                namespace_depth,
+                spec_index,
+                out,
+                visited_specializes,
+                prim_order_out,
+                authored_children_out,
+            );
+        }
+    }
+}
+
+fn add_specializes_opinions(
+    store: &mut dyn LayerStore,
+    local_stack: &LayerStack,
+    paths: &BTreeSet<PathId>,
+    out: &mut HashMap<PathId, PrimIndex>,
+    prim_order_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+    authored_children_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+) {
+    // Spec: AOUSD Core §10 (specializes arc, §5.1.33). Specializes mirrors
+    // inherits but sits at the weakest position in LIVERPS.
+    let mut visited: HashSet<(PathId, PathId)> = HashSet::new();
+    for dest_root in paths.iter().copied() {
+        let specializes = resolve_specializes_for_prim(store, local_stack, dest_root);
+        for (arc_list_index, specialized_root) in specializes.into_iter().enumerate() {
+            let arc_list_index = u16::try_from(arc_list_index).unwrap_or(u16::MAX);
+            let namespace_depth =
+                u16::try_from(store.paths().resolve(dest_root).depth()).unwrap_or(u16::MAX);
+            add_specializes_edge_opinions(
+                store,
+                local_stack,
+                dest_root,
+                specialized_root,
+                None,
+                namespace_depth,
+                arc_list_index,
+                out,
+                &mut visited,
+                prim_order_out,
+                authored_children_out,
+            );
+        }
+    }
+}
+
+/// Specializes edge opinions mirror inherits but use [`ArcKind::Specializes`].
+fn add_specializes_edge_opinions(
+    store: &mut dyn LayerStore,
+    local_stack: &LayerStack,
+    dest_root: PathId,
+    specialized_root: PathId,
+    outer_arc_kind: Option<ArcKind>,
+    namespace_depth: u16,
+    arc_list_index: u16,
+    out: &mut HashMap<PathId, PrimIndex>,
+    visited: &mut HashSet<(PathId, PathId)>,
+    prim_order_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+    authored_children_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+) {
+    if !visited.insert((dest_root, specialized_root)) {
+        return;
+    }
+
+    let base_path = store.paths().resolve(dest_root).clone();
+    let specialized_path = store.paths().resolve(specialized_root).clone();
+
+    let mut remote_paths: Vec<PathId> = local_stack
+        .layers
+        .iter()
+        .filter_map(|id| store.layer(*id))
+        .flat_map(|layer| layer.prims.keys().copied())
+        .collect();
+    remote_paths.sort_by(|a, b| {
+        store
+            .paths()
+            .resolve(*a)
+            .cmp_with_tokens(store.paths().resolve(*b), store.tokens())
+    });
+    remote_paths.dedup();
+
+    let mut mapping: Vec<(PathId, PathId)> = Vec::new();
+    for remote_path_id in remote_paths {
+        let rel: Vec<_> = {
+            let remote_path = store.paths().resolve(remote_path_id);
+            let Some(rel) = remote_path.strip_prefix(&specialized_path) else {
+                continue;
+            };
+            rel.to_vec()
+        };
+        let dest_path_id = store.paths_mut().intern(base_path.join(&rel));
+        if out.contains_key(&dest_path_id) {
+            mapping.push((remote_path_id, dest_path_id));
+        }
+    }
+
+    let (arc_kind, nested_arc_kind) = match outer_arc_kind {
+        Some(outer) => (outer, Some(ArcKind::Specializes)),
+        None => (ArcKind::Specializes, None),
+    };
+
+    for (layer_strength, layer_id) in local_stack.layers.iter().copied().enumerate() {
+        let layer_strength = u16::try_from(layer_strength).unwrap_or(u16::MAX);
+        let mut pending = Vec::new();
+        let mut pending_sources = Vec::new();
+        {
+            let Some(layer) = store.layer(layer_id) else {
+                continue;
+            };
+
+            for (remote_path_id, dest_path_id) in &mapping {
+                let Some(spec) = layer.prims.get(remote_path_id) else {
+                    continue;
+                };
+                if let Some(order) = &spec.prim_order {
+                    prim_order_out.entry(*dest_path_id).or_default().push((
+                        OpinionKey {
+                            is_local: false,
+                            arc_kind,
+                            nested_arc_kind,
+                            namespace_depth,
+                            authored: true,
+                            arc_list_index,
+                            layer_strength,
+                            layer_id,
+                            spec_path: *remote_path_id,
+                        },
+                        order.clone(),
+                    ));
+                }
+
+                if !spec.authored_children.is_empty() {
+                    authored_children_out
+                        .entry(*dest_path_id)
+                        .or_default()
+                        .push((
+                            OpinionKey {
+                                is_local: false,
+                                arc_kind,
+                                nested_arc_kind,
+                                namespace_depth,
+                                authored: true,
+                                arc_list_index,
+                                layer_strength,
+                                layer_id,
+                                spec_path: *remote_path_id,
+                            },
+                            spec.authored_children.clone(),
+                        ));
+                }
+
+                pending_sources.push((
+                    *dest_path_id,
+                    OpinionKey {
+                        is_local: false,
+                        arc_kind,
+                        nested_arc_kind,
+                        namespace_depth,
+                        authored: true,
+                        arc_list_index,
+                        layer_strength,
+                        layer_id,
+                        spec_path: *remote_path_id,
+                    },
+                ));
+                for (field, value) in &spec.fields {
+                    pending.push((*dest_path_id, *remote_path_id, *field, value.clone()));
+                }
+            }
+        }
+
+        for (dest_path_id, key) in pending_sources {
+            out.get_mut(&dest_path_id)
+                .expect("path exists")
+                .add_source(key);
+        }
+
+        for (dest_path_id, remote_path_id, field, value) in pending {
+            let value = remap_field_value_paths(store, &base_path, &specialized_path, value);
+            out.get_mut(&dest_path_id)
+                .expect("path exists")
+                .add_opinion(Opinion {
+                    key: OpinionKey {
+                        is_local: false,
+                        arc_kind,
+                        nested_arc_kind,
+                        namespace_depth,
+                        authored: true,
+                        arc_list_index,
+                        layer_strength,
+                        layer_id,
+                        spec_path: remote_path_id,
+                    },
+                    field,
+                    value,
+                });
+        }
+    }
+
+    // Handle nested specializes arcs.
+    for (remote_path_id, dest_path_id) in mapping {
+        let nested_specializes = resolve_specializes_for_prim(store, local_stack, remote_path_id);
+        for (nested_index, nested) in nested_specializes.into_iter().enumerate() {
+            let nested_index = u16::try_from(nested_index).unwrap_or(u16::MAX);
+            let namespace_depth =
+                u16::try_from(store.paths().resolve(dest_path_id).depth()).unwrap_or(u16::MAX);
+
+            let translated = remap_path_id(store, &base_path, &specialized_path, nested);
+            if translated != nested {
+                add_specializes_edge_opinions(
+                    store,
+                    local_stack,
+                    dest_path_id,
+                    translated,
+                    outer_arc_kind,
+                    namespace_depth,
+                    nested_index,
+                    out,
+                    visited,
+                    prim_order_out,
+                    authored_children_out,
+                );
+
+                if let (Some(base_parent), Some(specialized_parent)) =
+                    (base_path.parent(), specialized_path.parent())
+                {
+                    let parent_translated =
+                        remap_path_id(store, &base_parent, &specialized_parent, nested);
+                    if parent_translated != translated && parent_translated != nested {
+                        add_specializes_edge_opinions(
+                            store,
+                            local_stack,
+                            dest_path_id,
+                            parent_translated,
+                            outer_arc_kind,
+                            namespace_depth,
+                            nested_index,
+                            out,
+                            visited,
+                            prim_order_out,
+                            authored_children_out,
+                        );
+                    }
+                }
+            }
+            add_specializes_edge_opinions(
+                store,
+                local_stack,
+                dest_path_id,
+                nested,
+                outer_arc_kind,
+                namespace_depth,
+                nested_index,
+                out,
+                visited,
                 prim_order_out,
                 authored_children_out,
             );

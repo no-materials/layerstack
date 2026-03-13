@@ -300,3 +300,25 @@ fn basic_local_and_global_class_combination_root_layer_stack_matches() {
     assert_layer_stack_matches(&loaded, &pcp_path);
     assert_pcp_composing(&mut loaded, &pcp_path);
 }
+
+#[test]
+fn basic_specializes_root_layer_stack_matches() {
+    let (mut loaded, pcp_path) = load_fixture("BasicSpecializes_root");
+    assert_layer_stack_matches(&loaded, &pcp_path);
+    assert_pcp_composing(&mut loaded, &pcp_path);
+}
+
+#[test]
+#[ignore = "requires nested payload-through-subroot, self-payload, and default prim features"]
+fn basic_payload_root_layer_stack_matches() {
+    let (mut loaded, pcp_path) = load_fixture("BasicPayload_root");
+    assert_layer_stack_matches(&loaded, &pcp_path);
+    assert_pcp_composing(&mut loaded, &pcp_path);
+}
+
+#[test]
+fn basic_nested_payload_root_layer_stack_matches() {
+    let (mut loaded, pcp_path) = load_fixture("BasicNestedPayload_root");
+    assert_layer_stack_matches(&loaded, &pcp_path);
+    assert_pcp_composing(&mut loaded, &pcp_path);
+}

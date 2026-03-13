@@ -109,6 +109,22 @@ pub struct PrimSpec {
     ///
     /// Spec: AOUSD Core §10 (inherits arc), with ordering via §12.4 (`ListOps`).
     pub inherits: ListOp<PathId>,
+    /// Specializes arcs (a `ListOp` chain across the layer stack).
+    ///
+    /// Specializes is similar to inherits but sits at the weakest position in
+    /// LIVERPS. Unlike references, specializes propagates through all levels of
+    /// referencing.
+    ///
+    /// Spec: AOUSD Core §10 (specializes arc, §5.1.33), with ordering via §12.4 (`ListOps`).
+    pub specializes: ListOp<PathId>,
+    /// Payloads arcs (a `ListOp` chain across the layer stack).
+    ///
+    /// Payloads are structurally identical to references but support deferred
+    /// loading. When loaded, they behave like references with the same namespace
+    /// mapping. Their position in LIVERPS is between References and Specializes.
+    ///
+    /// Spec: AOUSD Core §10 (payloads arc, §5.1.22).
+    pub payloads: ListOp<Reference>,
     /// Optional child ordering (aka `primOrder` in the supplemental suite).
     ///
     /// This is used during stage population to produce deterministic, authored

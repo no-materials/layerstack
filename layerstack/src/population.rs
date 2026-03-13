@@ -10,8 +10,10 @@ use alloc::{collections::BTreeSet, vec::Vec};
 use hashbrown::{HashMap, HashSet};
 
 use crate::{
-    arcs::resolve_inherits_for_prim,
-    arcs::resolve_references_for_prim,
+    arcs::{
+        resolve_inherits_for_prim, resolve_payloads_for_prim, resolve_references_for_prim,
+        resolve_specializes_for_prim,
+    },
     doc::LayerStore,
     doc::{LayerId, Reference},
     layer_stack::LayerStack,
@@ -79,6 +81,36 @@ fn gather_populated_paths(
                 &mut paths,
                 &mut queue,
                 &mut visited_refs,
+                &mut visited_inherits,
+            );
+        }
+
+        // Payloads behave like references for population purposes.
+        // Spec: AOUSD Core §10 (payloads arc, §5.1.22).
+        let payloads = resolve_payloads_for_prim(store, local_stack, path);
+        for payload in payloads {
+            expand_reference_paths(
+                store,
+                path,
+                payload,
+                &mut paths,
+                &mut queue,
+                &mut visited_refs,
+                &mut visited_inherits,
+            );
+        }
+
+        // Specializes behaves like inherits for population purposes.
+        // Spec: AOUSD Core §10 (specializes arc, §5.1.33).
+        let specializes = resolve_specializes_for_prim(store, local_stack, path);
+        for specialized_root in specializes {
+            expand_inherit_paths(
+                store,
+                local_stack,
+                path,
+                specialized_root,
+                &mut paths,
+                &mut queue,
                 &mut visited_inherits,
             );
         }
