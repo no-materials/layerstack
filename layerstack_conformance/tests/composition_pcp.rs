@@ -414,7 +414,7 @@ fn tricky_nested_specializes_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires inherits child ordering fix"]
+#[ignore = "requires reference propagation through nested inherits chains"]
 fn tricky_nested_classes_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("TrickyNestedClasses_root");
     assert_layer_stack_matches(&loaded, &pcp_path);

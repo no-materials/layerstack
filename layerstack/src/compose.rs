@@ -2468,6 +2468,31 @@ fn apply_authored_children_base_order(
     let mut sorted = opinions.to_vec();
     sorted.sort_by(|a, b| a.0.cmp_strongest_first(&b.0));
 
+    // When the strongest opinion is Local and the next is from a Reference arc,
+    // and the Local opinion's children are all also present in the Reference
+    // opinion, prefer the Reference opinion as the baseline. This handles
+    // the case where local `over` children shouldn't override reference-defined
+    // child ordering.
+    if sorted.len() >= 2 && sorted[0].0.arc_kind == ArcKind::Local {
+        let local_names: HashSet<TokenId> = sorted[0].1.iter().copied().collect();
+        let local_order = sorted[0].1.clone();
+        // Find the first Reference opinion.
+        if let Some(ref_idx) = sorted[1..]
+            .iter()
+            .position(|(k, _)| k.arc_kind == ArcKind::References)
+        {
+            let ref_idx = ref_idx + 1;
+            let ref_names: HashSet<TokenId> = sorted[ref_idx].1.iter().copied().collect();
+            // If all local children also exist in the reference target's children,
+            // swap: use the reference opinion as the baseline.
+            if local_names.is_subset(&ref_names) && local_names != ref_names
+                || (local_names == ref_names && local_order != sorted[ref_idx].1)
+            {
+                sorted.swap(0, ref_idx);
+            }
+        }
+    }
+
     let mut out = Vec::new();
     let mut seen = HashSet::<PathId>::new();
     for (_, names) in sorted {
