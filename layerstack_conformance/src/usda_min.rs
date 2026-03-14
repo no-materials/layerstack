@@ -128,6 +128,8 @@ struct PrimDef {
     path: String,
     specifier: layerstack::doc::Specifier,
     attrs: Vec<String>,
+    /// TimeSamples: (attr_name, sorted samples).
+    time_samples: Vec<(String, Vec<(f64, String)>)>,
     references: ReferencesDef,
     inherits: InheritsDef,
     specializes: SpecializesDef,
@@ -322,6 +324,58 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
             }
         }
 
+        // Parse timeSamples: `<type> <name>.timeSamples = {`
+        if line.contains(".timeSamples")
+            && let Some(attr_name) = parse_time_samples_attr(line)
+            && !scope.is_empty()
+        {
+            let current_path = format!("/{}", scope.join("/"));
+            // Accumulate time sample entries until closing `}`.
+            let mut samples: Vec<(f64, String)> = Vec::new();
+
+            // Check if entries are on the same line as the opening brace.
+            if let Some(brace_pos) = line.find('{') {
+                let inline = line[brace_pos + 1..].trim();
+                if !inline.is_empty() && !inline.starts_with('}') {
+                    for entry in inline.trim_end_matches('}').split(',') {
+                        if let Some(sample) = parse_time_sample_entry(entry.trim()) {
+                            samples.push(sample);
+                        }
+                    }
+                }
+            }
+
+            // Read subsequent lines if the block wasn't closed inline.
+            if !line.contains('}') || line.rfind('{') > line.rfind('}') {
+                while let Some(sample_line) = lines.peek() {
+                    let sample_line = sample_line.trim();
+                    if sample_line.starts_with('}') {
+                        lines.next();
+                        break;
+                    }
+                    let consumed = lines.next().unwrap().trim().to_string();
+                    for entry in consumed.split(',') {
+                        let entry = entry.trim();
+                        if !entry.is_empty()
+                            && let Some(sample) = parse_time_sample_entry(entry)
+                        {
+                            samples.push(sample);
+                        }
+                    }
+                }
+            }
+
+            // Sort by time and add to current prim.
+            samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
+            if let Some(def) = out.iter_mut().rev().find(|d| d.path == current_path) {
+                // Also register the attr name so it shows up as a known field.
+                if !def.attrs.contains(&attr_name) {
+                    def.attrs.push(attr_name.clone());
+                }
+                def.time_samples.push((attr_name, samples));
+            }
+        }
+
         if (line.starts_with("def ") || line.starts_with("over ") || line.starts_with("class "))
             && let Some(name) = parse_prim_name(line)
         {
@@ -483,6 +537,7 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                             path: format!("/{}", scope.join("/")),
                             specifier: pending.specifier,
                             attrs: Vec::new(),
+                            time_samples: Vec::new(),
                             references: pending.references,
                             inherits: pending.inherits,
                             specializes: pending.specializes,
@@ -656,6 +711,29 @@ fn parse_any_attr(line: &str) -> Option<String> {
         .unwrap_or(rest.len());
     let name = rest[..end].trim();
     (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Parse an attribute name from a `.timeSamples = {` line.
+/// e.g. `int root.timeSamples = {` → `"root"`.
+fn parse_time_samples_attr(line: &str) -> Option<String> {
+    let line = line.trim();
+    let rest = ATTR_TYPE_PREFIXES
+        .iter()
+        .find_map(|prefix| line.strip_prefix(prefix))?
+        .trim();
+    let dot_pos = rest.find(".timeSamples")?;
+    let name = rest[..dot_pos].trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Parse a single time sample entry like `-10:100` or `0:200`.
+fn parse_time_sample_entry(entry: &str) -> Option<(f64, String)> {
+    let entry = entry.trim().trim_end_matches(',');
+    let colon = entry.find(':')?;
+    let time_str = entry[..colon].trim();
+    let value_str = entry[colon + 1..].trim();
+    let time: f64 = time_str.parse().ok()?;
+    Some((time, value_str.to_string()))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1178,6 +1256,24 @@ fn load_layer_with_prims(
             spec.fields
                 .entry(tok)
                 .or_insert(FieldValue::Value(Value::Null));
+        }
+        for (attr_name, samples) in prim.time_samples {
+            let tok = store.tokens.intern(attr_name);
+            let ts: Vec<(f64, Value)> = samples
+                .into_iter()
+                .map(|(t, v)| {
+                    // Try parsing as int, then float, then string.
+                    let value = if let Ok(i) = v.parse::<i64>() {
+                        Value::Int(i)
+                    } else if let Ok(f) = v.parse::<f64>() {
+                        Value::Float(f)
+                    } else {
+                        Value::String(v.into())
+                    };
+                    (t, value)
+                })
+                .collect();
+            spec.fields.insert(tok, FieldValue::TimeSamples(ts));
         }
         spec.references = resolve_references(
             &prim.references,
