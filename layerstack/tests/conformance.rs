@@ -142,13 +142,13 @@ fn variants_selection_is_strength_ordered() {
     fields_a.insert(field_x, FieldValue::Value(Value::Int(1)));
     set_spec
         .variants
-        .insert(variant_a, VariantSpec { fields: fields_a });
+        .insert(variant_a, VariantSpec { fields: fields_a, ..Default::default() });
 
     let mut fields_b = HashMap::new();
     fields_b.insert(field_x, FieldValue::Value(Value::Int(2)));
     set_spec
         .variants
-        .insert(variant_b, VariantSpec { fields: fields_b });
+        .insert(variant_b, VariantSpec { fields: fields_b, ..Default::default() });
 
     sub_spec.variant_sets.insert(set_v, set_spec);
     sub_layer.prims.insert(prim, sub_spec);

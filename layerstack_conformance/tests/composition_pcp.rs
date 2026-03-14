@@ -9,15 +9,34 @@ use layerstack_conformance::{
     usda_min::{LoadedStage, load_entry_usda},
 };
 
-/// Strips variant notation from a prim spec path, e.g. `/A{v=v2}` → `/A`.
+/// Strips variant notation from a prim spec path.
+///
+/// Examples:
+/// - `/A{v=v2}` → `/A`
+/// - `/C{v1=C}v1_C` → `/C/v1_C` (inserts `/` when variant is followed by a child name)
 fn strip_variant_notation(spec: &str) -> String {
     let mut result = String::with_capacity(spec.len());
     let mut depth = 0;
+    let mut just_closed = false;
     for ch in spec.chars() {
         match ch {
-            '{' => depth += 1,
-            '}' => depth -= 1,
-            _ if depth == 0 => result.push(ch),
+            '{' => {
+                depth += 1;
+                just_closed = false;
+            }
+            '}' => {
+                depth -= 1;
+                just_closed = depth == 0;
+            }
+            _ if depth == 0 => {
+                // After closing a variant selection, insert `/` before the next
+                // path component if there isn't one already.
+                if just_closed && ch != '/' {
+                    result.push('/');
+                }
+                just_closed = false;
+                result.push(ch);
+            }
             _ => {}
         }
     }
@@ -357,7 +376,6 @@ fn basic_specializes_and_references_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires specializes propagation through variant arcs"]
 fn basic_specializes_and_variants_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("BasicSpecializesAndVariants_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
@@ -434,7 +452,6 @@ fn tricky_non_local_variant_selection_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires variant selection filtering for children"]
 fn tricky_variant_ancestral_selection_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("TrickyVariantAncestralSelection_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
@@ -449,7 +466,7 @@ fn tricky_variant_weaker_selection_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires variant selection filtering for children"]
+#[ignore = "requires variant children ordering across sibling reference arcs"]
 fn tricky_variant_independent_selection_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("TrickyVariantIndependentSelection_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
@@ -482,6 +499,92 @@ fn tricky_variant_selection_in_variant_root_layer_stack_matches() {
 #[ignore = "requires variant-in-path prim stack notation"]
 fn tricky_variant_selection_in_variant2_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("TrickyVariantSelectionInVariant2_root");
+    assert_layer_stack_matches(&loaded, &pcp_path);
+    assert_pcp_composing(&mut loaded, &pcp_path);
+}
+
+#[test]
+#[ignore = "requires variant children population through reference arcs"]
+fn basic_variant_with_reference_root_layer_stack_matches() {
+    let (mut loaded, pcp_path) = load_fixture("BasicVariantWithReference_root");
+    assert_layer_stack_matches(&loaded, &pcp_path);
+    assert_pcp_composing(&mut loaded, &pcp_path);
+}
+
+#[test]
+#[ignore = "requires variant children population through inherits arcs"]
+fn tricky_variant_weaker_selection2_root_layer_stack_matches() {
+    let (mut loaded, pcp_path) = load_fixture("TrickyVariantWeakerSelection2_root");
+    assert_layer_stack_matches(&loaded, &pcp_path);
+    assert_pcp_composing(&mut loaded, &pcp_path);
+}
+
+#[test]
+fn tricky_variant_weaker_selection3_root_layer_stack_matches() {
+    let (mut loaded, pcp_path) = load_fixture("TrickyVariantWeakerSelection3_root");
+    assert_layer_stack_matches(&loaded, &pcp_path);
+    assert_pcp_composing(&mut loaded, &pcp_path);
+}
+
+#[test]
+#[ignore = "requires variant children ordering refinement"]
+fn tricky_variant_weaker_selection4_root_layer_stack_matches() {
+    let (mut loaded, pcp_path) = load_fixture("TrickyVariantWeakerSelection4_root");
+    assert_layer_stack_matches(&loaded, &pcp_path);
+    assert_pcp_composing(&mut loaded, &pcp_path);
+}
+
+#[test]
+#[ignore = "requires connection field parsing in variant branches"]
+fn basic_variant_with_connections_root_layer_stack_matches() {
+    let (mut loaded, pcp_path) = load_fixture("BasicVariantWithConnections_root");
+    assert_layer_stack_matches(&loaded, &pcp_path);
+    assert_pcp_composing(&mut loaded, &pcp_path);
+}
+
+#[test]
+#[ignore = "requires variant children ordering refinement"]
+fn tricky_variant_override_of_local_class_root_layer_stack_matches() {
+    let (mut loaded, pcp_path) = load_fixture("TrickyVariantOverrideOfLocalClass_root");
+    assert_layer_stack_matches(&loaded, &pcp_path);
+    assert_pcp_composing(&mut loaded, &pcp_path);
+}
+
+#[test]
+fn tricky_variant_in_payload_root_layer_stack_matches() {
+    let (mut loaded, pcp_path) = load_fixture("TrickyVariantInPayload_root");
+    assert_layer_stack_matches(&loaded, &pcp_path);
+    assert_pcp_composing(&mut loaded, &pcp_path);
+}
+
+#[test]
+#[ignore = "requires inherits arc parsing inside variant branches"]
+fn tricky_inherits_in_variants_root_layer_stack_matches() {
+    let (mut loaded, pcp_path) = load_fixture("TrickyInheritsInVariants_root");
+    assert_layer_stack_matches(&loaded, &pcp_path);
+    assert_pcp_composing(&mut loaded, &pcp_path);
+}
+
+#[test]
+#[ignore = "requires inherits arc parsing inside variant branches"]
+fn tricky_inherits_in_variants2_root_layer_stack_matches() {
+    let (mut loaded, pcp_path) = load_fixture("TrickyInheritsInVariants2_root");
+    assert_layer_stack_matches(&loaded, &pcp_path);
+    assert_pcp_composing(&mut loaded, &pcp_path);
+}
+
+#[test]
+#[ignore = "requires variant property stack notation"]
+fn specializes_and_variants_root_layer_stack_matches() {
+    let (mut loaded, pcp_path) = load_fixture("SpecializesAndVariants_root");
+    assert_layer_stack_matches(&loaded, &pcp_path);
+    assert_pcp_composing(&mut loaded, &pcp_path);
+}
+
+#[test]
+#[ignore = "requires variant property stack notation"]
+fn specializes_and_variants2_root_layer_stack_matches() {
+    let (mut loaded, pcp_path) = load_fixture("SpecializesAndVariants2_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
     assert_pcp_composing(&mut loaded, &pcp_path);
 }

@@ -97,6 +97,10 @@ pub struct Reference {
 pub struct VariantSpec {
     /// Authored fields within this variant.
     pub fields: HashMap<TokenId, FieldValue>,
+    /// Child prim names introduced by this variant branch.
+    ///
+    /// These children are only populated when this variant is selected.
+    pub authored_children: Vec<TokenId>,
 }
 
 /// A variant set: a named collection of variants.
@@ -128,6 +132,11 @@ pub struct PrimSpec {
     pub variant_selections: HashMap<TokenId, TokenId>,
     /// Authored variant sets available at this prim.
     pub variant_sets: HashMap<TokenId, VariantSetSpec>,
+    /// Ordered list of variant set names (from `variantSets` metadata).
+    ///
+    /// This determines the evaluation order for variant children.
+    /// Children from later variant sets appear before earlier ones.
+    pub variant_set_order: Vec<TokenId>,
     /// References arcs (a `ListOp` chain across the layer stack).
     pub references: ListOp<Reference>,
     /// Inherits arcs (a `ListOp` chain across the layer stack).

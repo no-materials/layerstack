@@ -97,7 +97,185 @@ pub fn compose_stage(store: &mut dyn LayerStore, root: LayerId, options: StageOp
         &mut children,
     );
 
+    filter_variant_children(store, &prims, &mut children);
+
     Stage::from_parts(prims, children, options.with_provenance)
+}
+
+/// Filters children maps by removing variant-only children that don't belong
+/// to the selected variant.
+///
+/// For each prim that has variant sets (found via its composed opinion sources),
+/// the selected variants determine which variant children remain. Children that
+/// exist only in non-selected variant branches are removed.
+///
+/// Spec: AOUSD Core §10.5 (variant selection), §11 (population).
+fn filter_variant_children(
+    store: &dyn LayerStore,
+    prims: &HashMap<PathId, PrimIndex>,
+    children: &mut HashMap<PathId, Vec<PathId>>,
+) {
+    use hashbrown::HashSet;
+
+    let parent_paths: Vec<PathId> = children.keys().copied().collect();
+    for parent_path in parent_paths {
+        let Some(prim_index) = prims.get(&parent_path) else {
+            continue;
+        };
+
+        // Collect all variant set specs and variant selections across opinion sources.
+        let mut all_variant_children: HashSet<TokenId> = HashSet::new();
+        let mut selected_children: HashSet<TokenId> = HashSet::new();
+        let mut has_variant_sets = false;
+        let mut variant_set_order: Vec<TokenId> = Vec::new();
+
+        // First, resolve variant selections and variant set order from all opinion sources.
+        let mut selections: HashMap<TokenId, TokenId> = HashMap::new();
+        for source in &prim_index.sources {
+            let Some(layer) = store.layer(source.layer_id) else {
+                continue;
+            };
+            let Some(spec) = layer.prims.get(&source.spec_path) else {
+                continue;
+            };
+            for (set, variant) in &spec.variant_selections {
+                selections.entry(*set).or_insert(*variant);
+            }
+            // Use the first non-empty variant_set_order we find.
+            if variant_set_order.is_empty() && !spec.variant_set_order.is_empty() {
+                variant_set_order = spec.variant_set_order.clone();
+            }
+        }
+
+        // Then check each source for variant sets.
+        for source in &prim_index.sources {
+            let Some(layer) = store.layer(source.layer_id) else {
+                continue;
+            };
+            let Some(spec) = layer.prims.get(&source.spec_path) else {
+                continue;
+            };
+
+            for (set_name, set_spec) in &spec.variant_sets {
+                for (variant_name, variant_spec) in &set_spec.variants {
+                    for child in &variant_spec.authored_children {
+                        has_variant_sets = true;
+                        all_variant_children.insert(*child);
+                        if selections.get(set_name) == Some(variant_name) {
+                            selected_children.insert(*child);
+                        }
+                    }
+                }
+            }
+        }
+
+        if !has_variant_sets || all_variant_children.is_empty() {
+            continue;
+        }
+
+        let unselected: HashSet<TokenId> = all_variant_children
+            .difference(&selected_children)
+            .copied()
+            .collect();
+
+        if unselected.is_empty() && variant_set_order.is_empty() {
+            continue;
+        }
+
+        // Filter children list.
+        if let Some(child_list) = children.get_mut(&parent_path) {
+            child_list.retain(|child_path| {
+                let child = store.paths().resolve(*child_path);
+                if let Some(leaf) = child.leaf() {
+                    !unselected.contains(&leaf)
+                } else {
+                    true
+                }
+            });
+
+            // Re-order variant children: children from later variant sets
+            // come first. Build a map from child name to variant set index.
+            if !variant_set_order.is_empty() {
+                let mut child_to_set_idx: HashMap<TokenId, usize> = HashMap::new();
+                for source in &prim_index.sources {
+                    let Some(layer) = store.layer(source.layer_id) else {
+                        continue;
+                    };
+                    let Some(spec) = layer.prims.get(&source.spec_path) else {
+                        continue;
+                    };
+                    for (set_name, set_spec) in &spec.variant_sets {
+                        let set_idx = variant_set_order
+                            .iter()
+                            .position(|s| s == set_name)
+                            .unwrap_or(usize::MAX);
+                        for (_variant_name, variant_spec) in &set_spec.variants {
+                            for child in &variant_spec.authored_children {
+                                child_to_set_idx.entry(*child).or_insert(set_idx);
+                            }
+                        }
+                    }
+                }
+
+                // Sort: non-variant children first (preserving order),
+                // then variant children in reverse variant set order.
+                child_list.sort_by(|a, b| {
+                    let a_leaf = store.paths().resolve(*a).leaf();
+                    let b_leaf = store.paths().resolve(*b).leaf();
+                    let a_idx = a_leaf
+                        .and_then(|l| child_to_set_idx.get(&l).copied())
+                        .map(|i| (true, i));
+                    let b_idx = b_leaf
+                        .and_then(|l| child_to_set_idx.get(&l).copied())
+                        .map(|i| (true, i));
+                    match (a_idx, b_idx) {
+                        (None, None) => Ordering::Equal,
+                        (None, Some(_)) => Ordering::Less,
+                        (Some(_), None) => Ordering::Greater,
+                        (Some((_, ai)), Some((_, bi))) => bi.cmp(&ai),
+                    }
+                });
+            }
+        }
+    }
+}
+
+/// Resolves variant selections considering both the local layer stack and
+/// referenced layers (weaker selections from references fill in gaps).
+///
+/// Spec: AOUSD Core §10.5 (variant selection), §9 (LIVERPS strength ordering).
+fn resolve_full_variant_selections(
+    store: &dyn LayerStore,
+    local_stack: &LayerStack,
+    path: PathId,
+) -> HashMap<TokenId, TokenId> {
+    let mut selections = resolve_variant_selections_for_prim(store, local_stack, path);
+
+    // Also gather selections from reference targets (weaker).
+    let refs = {
+        let mut ops = Vec::new();
+        for layer_id in &local_stack.layers {
+            let Some(layer) = store.layer(*layer_id) else {
+                continue;
+            };
+            let Some(spec) = layer.prims.get(&path) else {
+                continue;
+            };
+            ops.push(spec.references.clone());
+        }
+        crate::listop::resolve_list_chain::<Reference>(&[], ops)
+    };
+
+    for reference in refs {
+        let ref_stack = LayerStack::gather(store, reference.layer);
+        let ref_selections =
+            resolve_variant_selections_for_prim(store, &ref_stack, reference.prim_path);
+        for (set, variant) in ref_selections {
+            selections.entry(set).or_insert(variant);
+        }
+    }
+
+    selections
 }
 
 fn add_local_and_variant_opinions(
@@ -109,7 +287,7 @@ fn add_local_and_variant_opinions(
     authored_children_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
 ) {
     for path in paths.iter().copied() {
-        let selections = resolve_variant_selections_for_prim(store, local_stack, path);
+        let selections = resolve_full_variant_selections(store, local_stack, path);
         let namespace_depth =
             u16::try_from(store.paths().resolve(path).depth()).unwrap_or(u16::MAX);
 
@@ -775,6 +953,39 @@ fn add_reference_edge_opinions(
                         field: *field,
                         value: value.clone(),
                     });
+            }
+
+            // Forward variant opinions from selected variants.
+            // Variant selections are resolved using the combined stack
+            // (referencing layer selections take precedence).
+            {
+                let selections =
+                    resolve_variant_selections_for_prim(store, &combined_stack, *remote_path_id);
+                for (set, selected) in &selections {
+                    if let Some(set_spec) = remote_spec.variant_sets.get(set)
+                        && let Some(variant_spec) = set_spec.variants.get(selected)
+                    {
+                        for (field, value) in &variant_spec.fields {
+                            out.get_mut(dest_path_id)
+                                .expect("path exists")
+                                .add_opinion(Opinion {
+                                    key: OpinionKey {
+                                        is_local: false,
+                                        arc_kind: ArcKind::References,
+                                        nested_arc_kind: Some(ArcKind::Variants),
+                                        namespace_depth,
+                                        authored: true,
+                                        arc_list_index,
+                                        layer_strength,
+                                        layer_id: remote_layer_id,
+                                        spec_path: *remote_path_id,
+                                    },
+                                    field: *field,
+                                    value: value.clone(),
+                                });
+                        }
+                    }
+                }
             }
 
             if let Some(order) = &remote_spec.prim_order {

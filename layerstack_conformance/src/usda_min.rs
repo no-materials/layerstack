@@ -123,6 +123,12 @@ pub fn load_entry_usda_sublayers_only(entry: &Path) -> LoadedStage {
     }
 }
 
+#[derive(Clone, Debug)]
+enum VariantFieldType {
+    Double,
+    String,
+}
+
 #[derive(Debug)]
 struct PrimDef {
     path: String,
@@ -136,6 +142,12 @@ struct PrimDef {
     targets: TargetsDef,
     declares_targets: bool,
     prim_order: Option<Vec<String>>,
+    variant_selections: Vec<(String, String)>,
+    variant_set_names: Vec<String>,
+    /// If this prim is inside a variant branch: (parent_path, set_name, branch_name).
+    variant_parent: Option<(String, String, String)>,
+    /// Fields defined inside variant branches of this prim: (set_name, branch_name, attr_name, type).
+    variant_fields: Vec<(String, String, String, VariantFieldType)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -187,6 +199,8 @@ struct PendingPrim {
     inherits: InheritsDef,
     specializes: SpecializesDef,
     payloads: PayloadsDef,
+    variant_selections: Vec<(String, String)>,
+    variant_set_names: Vec<String>,
 }
 
 fn parse_sublayers(text: &str, base_dir: &Path) -> Vec<PathBuf> {
@@ -221,34 +235,96 @@ fn parse_sublayers(text: &str, base_dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// Brace-level context for tracking what each `{` ... `}` block represents.
+#[derive(Clone, Debug)]
+enum BraceKind {
+    /// A prim scope (def/over/class).
+    Prim,
+    /// A `variantSet "name" = { ... }` block.
+    VariantSet(String),
+    /// A variant branch `"name" { ... }` inside a variant set.
+    VariantBranch(String, String), // (set_name, branch_name)
+    /// Any other brace scope (e.g., `variants = { ... }`).
+    Other,
+}
+
 fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
     let mut out: Vec<PrimDef> = Vec::new();
 
     let mut scope: Vec<String> = Vec::new();
-    let mut brace_stack: Vec<bool> = Vec::new(); // true = prim scope, false = other
+    let mut brace_stack: Vec<BraceKind> = Vec::new();
     let mut pending: Option<PendingPrim> = None;
+
+    // Current variant context: if we're inside a variant branch, this tracks
+    // the owning prim path, set name, and branch name.
+    fn current_variant_context(brace_stack: &[BraceKind]) -> Option<(String, String)> {
+        for kind in brace_stack.iter().rev() {
+            if let BraceKind::VariantBranch(set, branch) = kind {
+                return Some((set.clone(), branch.clone()));
+            }
+        }
+        None
+    }
+
+    // Find the owning prim path for the current scope (skip variant set/branch braces).
+    fn owning_prim_path(scope: &[String]) -> String {
+        if scope.is_empty() {
+            String::new()
+        } else {
+            format!("/{}", scope.join("/"))
+        }
+    }
 
     let mut lines = text.lines().peekable();
     while let Some(raw) = lines.next() {
         let line = raw.trim();
 
-        if let Some(attr) = parse_double_attr(line)
-            && let Some(last) = out.last_mut()
-            && !scope.is_empty()
-        {
-            let current_path = format!("/{}", scope.join("/"));
-            if last.path == current_path {
-                last.custom_double_attrs.push(attr);
-            }
-        }
+        // Check if we're inside a variant branch — attrs inside variant branches
+        // should be routed to the parent prim's variant_fields, not its regular fields.
+        let variant_ctx = current_variant_context(&brace_stack);
 
-        if let Some(attr) = parse_string_attr(line)
-            && let Some(last) = out.last_mut()
-            && !scope.is_empty()
-        {
-            let current_path = format!("/{}", scope.join("/"));
-            if last.path == current_path {
-                last.string_attrs.push(attr);
+        if let Some((ref set_name, ref branch_name)) = variant_ctx {
+            // Inside a variant branch: route attrs to the parent prim.
+            let parent_path = owning_prim_path(&scope);
+            if let Some(attr) = parse_double_attr(line)
+                && let Some(parent_def) = out.iter_mut().rev().find(|d| d.path == parent_path)
+            {
+                parent_def.variant_fields.push((
+                    set_name.clone(),
+                    branch_name.clone(),
+                    attr,
+                    VariantFieldType::Double,
+                ));
+            }
+            if let Some(attr) = parse_string_attr(line)
+                && let Some(parent_def) = out.iter_mut().rev().find(|d| d.path == parent_path)
+            {
+                parent_def.variant_fields.push((
+                    set_name.clone(),
+                    branch_name.clone(),
+                    attr,
+                    VariantFieldType::String,
+                ));
+            }
+        } else {
+            if let Some(attr) = parse_double_attr(line)
+                && let Some(last) = out.last_mut()
+                && !scope.is_empty()
+            {
+                let current_path = format!("/{}", scope.join("/"));
+                if last.path == current_path {
+                    last.custom_double_attrs.push(attr);
+                }
+            }
+
+            if let Some(attr) = parse_string_attr(line)
+                && let Some(last) = out.last_mut()
+                && !scope.is_empty()
+            {
+                let current_path = format!("/{}", scope.join("/"));
+                if last.path == current_path {
+                    last.string_attrs.push(attr);
+                }
             }
         }
 
@@ -269,29 +345,23 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                 inherits: InheritsDef::default(),
                 specializes: SpecializesDef::default(),
                 payloads: PayloadsDef::default(),
+                variant_selections: Vec::new(),
+                variant_set_names: Vec::new(),
             });
         }
 
         if line.contains('(')
             && let Some(pending) = pending.as_mut()
         {
-            // Collect metadata lines. If the opening `(` and closing `)` are on
-            // the same line (inline metadata), extract the content between them.
-            // Otherwise, read subsequent lines until we find a line starting with `)`.
-            //
-            // Multi-line arrays like `payload = [\n @a@, \n @b@ \n]` are joined
-            // into a single logical line before parsing.
             let mut meta_lines: Vec<String> = Vec::new();
             if let (Some(open), Some(close)) = (line.find('('), line.rfind(')')) {
                 if close > open {
-                    // Inline metadata: extract content between ( and )
                     let inline = line[open + 1..close].trim();
                     if !inline.is_empty() {
                         meta_lines.push(inline.to_string());
                     }
                 }
             } else {
-                // Multi-line metadata: read until `)`.
                 let mut accumulator: Option<String> = None;
                 while let Some(spec_line) = lines.peek() {
                     let spec_line = spec_line.trim();
@@ -300,21 +370,21 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                     }
                     let consumed = lines.next().unwrap().trim().to_string();
 
-                    // Handle multi-line arrays: accumulate lines between `[` and `]`.
                     if let Some(ref mut acc) = accumulator {
                         acc.push(' ');
                         acc.push_str(&consumed);
-                        if consumed.contains(']') {
+                        if consumed.contains(']') || consumed.contains('}') {
                             meta_lines.push(acc.clone());
                             accumulator = None;
                         }
-                    } else if consumed.contains('[') && !consumed.contains(']') {
+                    } else if (consumed.contains('[') && !consumed.contains(']'))
+                        || (consumed.starts_with("variants") && consumed.contains('{') && !consumed.contains('}'))
+                    {
                         accumulator = Some(consumed);
                     } else {
                         meta_lines.push(consumed);
                     }
                 }
-                // Flush any unclosed accumulator.
                 if let Some(acc) = accumulator {
                     meta_lines.push(acc);
                 }
@@ -348,6 +418,15 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                         RefOp::Prepend => pending.payloads.prepend.extend(specs),
                         RefOp::Append => pending.payloads.append.extend(specs),
                     }
+                }
+                // Parse variant selections: `variants = { string v1 = "C", string v2 = "Z" }`
+                if let Some(sels) = parse_variant_selections_line(spec_line) {
+                    pending.variant_selections.extend(sels);
+                }
+                // Parse variant set names: `variantSets = ["v1", "v2"]`
+                // or `add variantSets = "costume"`
+                if let Some(names) = parse_variant_set_names_line(spec_line) {
+                    pending.variant_set_names.extend(names);
                 }
             }
         }
@@ -386,12 +465,26 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
             }
         }
 
+        // Detect `variantSet "name" = {` before generic brace handling.
+        let variant_set_name = parse_variant_set_start(line);
+        // Detect `"branchName" {` inside a variant set.
+        let variant_branch_name = if variant_set_name.is_none()
+            && pending.is_none()
+            && brace_stack.last().map_or(false, |k| matches!(k, BraceKind::VariantSet(_)))
+        {
+            parse_variant_branch_name(line)
+        } else {
+            None
+        };
+
         for ch in line.chars() {
             match ch {
                 '{' => {
                     if let Some(pending) = pending.take() {
+                        let variant_parent = current_variant_context(&brace_stack)
+                            .map(|(set, branch)| (owning_prim_path(&scope), set, branch));
                         scope.push(pending.name.clone());
-                        brace_stack.push(true);
+                        brace_stack.push(BraceKind::Prim);
                         out.push(PrimDef {
                             path: format!("/{}", scope.join("/")),
                             specifier: pending.specifier,
@@ -404,13 +497,27 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                             targets: TargetsDef::default(),
                             declares_targets: false,
                             prim_order: None,
+                            variant_selections: pending.variant_selections,
+                            variant_set_names: pending.variant_set_names,
+                            variant_parent,
+                            variant_fields: Vec::new(),
                         });
+                    } else if let Some(ref set_name) = variant_set_name {
+                        brace_stack.push(BraceKind::VariantSet(set_name.clone()));
+                    } else if let Some(ref branch) = variant_branch_name {
+                        let set_name = match brace_stack.last() {
+                            Some(BraceKind::VariantSet(s)) => s.clone(),
+                            _ => String::new(),
+                        };
+                        brace_stack.push(BraceKind::VariantBranch(set_name, branch.clone()));
                     } else {
-                        brace_stack.push(false);
+                        brace_stack.push(BraceKind::Other);
                     }
                 }
                 '}' => {
-                    if brace_stack.pop().is_some_and(|is_prim| is_prim) {
+                    if let Some(kind) = brace_stack.pop()
+                        && matches!(kind, BraceKind::Prim)
+                    {
                         let _ = scope.pop();
                     }
                 }
@@ -420,6 +527,93 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
     }
 
     out
+}
+
+/// Parses `variants = { string v1 = "C", string v2 = "Z" }` from a metadata line.
+/// Handles both comma-separated and space-separated entries (multi-line metadata
+/// gets joined with spaces by the accumulator).
+fn parse_variant_selections_line(line: &str) -> Option<Vec<(String, String)>> {
+    let line = line.trim();
+    let rest = line.strip_prefix("variants")?;
+    let rhs = rest.split_once('=').map(|(_, rhs)| rhs.trim())?;
+    let rhs = rhs.trim();
+    let lb = rhs.find('{')?;
+    let rb = rhs.rfind('}')?;
+    let inside = &rhs[lb + 1..rb];
+
+    let mut selections = Vec::new();
+    // Split on `string ` boundaries to handle both comma and space separation.
+    for part in inside.split("string ") {
+        let part = part.trim().trim_end_matches(',').trim();
+        if part.is_empty() {
+            continue;
+        }
+        // Parse `setName = "value"`
+        let (name, val_part) = part.split_once('=')?;
+        let name = name.trim();
+        let val = val_part.trim().trim_matches('"');
+        if !name.is_empty() && !val.is_empty() {
+            selections.push((name.to_string(), val.to_string()));
+        }
+    }
+    Some(selections)
+}
+
+/// Parses `variantSets = ["v1", "v2"]` or `add variantSets = "costume"` from a metadata line.
+fn parse_variant_set_names_line(line: &str) -> Option<Vec<String>> {
+    let line = line.trim();
+    let rest = line
+        .strip_prefix("add variantSets")
+        .or_else(|| line.strip_prefix("prepend variantSets"))
+        .or_else(|| line.strip_prefix("variantSets"))?;
+    let rhs = rest.split_once('=').map(|(_, rhs)| rhs.trim())?;
+    let rhs = rhs.trim();
+    if rhs.starts_with('[') {
+        parse_string_list_rhs(rhs)
+    } else {
+        // Single unquoted or quoted value: `"costume"`
+        let val = rhs.trim_matches('"');
+        if val.is_empty() {
+            None
+        } else {
+            Some(vec![val.to_string()])
+        }
+    }
+}
+
+/// Detects `variantSet "name" = {` and returns the set name.
+fn parse_variant_set_start(line: &str) -> Option<String> {
+    let line = line.trim();
+    let rest = line.strip_prefix("variantSet ")?;
+    let first_quote = rest.find('"')?;
+    let after = &rest[first_quote + 1..];
+    let second_quote = after.find('"')?;
+    let name = &after[..second_quote];
+    // Verify there's an `=` and `{` after the name
+    let remaining = &after[second_quote + 1..];
+    if remaining.contains('=') {
+        Some(name.to_string())
+    } else {
+        None
+    }
+}
+
+/// Detects `"branchName" {` inside a variant set.
+fn parse_variant_branch_name(line: &str) -> Option<String> {
+    let line = line.trim();
+    if !line.starts_with('"') {
+        return None;
+    }
+    let rest = &line[1..];
+    let end = rest.find('"')?;
+    let name = &rest[..end];
+    let after = rest[end + 1..].trim();
+    // Should be followed by `{` (possibly with whitespace)
+    if after.starts_with('{') || after.is_empty() {
+        Some(name.to_string())
+    } else {
+        None
+    }
 }
 
 fn parse_double_attr(line: &str) -> Option<String> {
@@ -914,13 +1108,33 @@ fn load_layer_with_prims(
         Vec<layerstack::TokenId>,
     > = std::collections::HashMap::new();
 
+    // Track which children are variant children so we exclude them from
+    // the parent's authored_children (they go in VariantSpec::authored_children instead).
+    let mut variant_child_names: std::collections::HashMap<
+        String, // parent path
+        std::collections::HashSet<String>, // child names that are variant children
+    > = std::collections::HashMap::new();
+    for prim in &prim_defs {
+        if let Some((parent_path, _set, _branch)) = &prim.variant_parent {
+            let leaf = prim.path.rsplit('/').next().unwrap_or("");
+            variant_child_names
+                .entry(parent_path.clone())
+                .or_default()
+                .insert(leaf.to_string());
+        }
+    }
+
     for prim in prim_defs {
         let prim_path = {
             let path = LsPath::parse_absolute(&prim.path, &mut store.tokens).expect("path");
             store.paths.intern(path)
         };
 
-        if let Some(parent) = store.paths.resolve(prim_path).parent() {
+        // Only add to authored_children if NOT a variant child.
+        let is_variant_child = prim.variant_parent.is_some();
+        if !is_variant_child
+            && let Some(parent) = store.paths.resolve(prim_path).parent()
+        {
             let parent_id = store.paths.intern(parent);
             if let Some(name) = store.paths.resolve(prim_path).leaf() {
                 let list = children_by_parent.entry(parent_id).or_default();
@@ -931,6 +1145,22 @@ fn load_layer_with_prims(
         }
 
         prim_defs_with_ids.push((prim_path, prim));
+    }
+
+    // Collect variant children info for building VariantSpecs.
+    // Key: (parent_path, set_name, branch_name) → Vec<child_name>
+    let mut variant_children_map: std::collections::HashMap<
+        (String, String, String),
+        Vec<String>,
+    > = std::collections::HashMap::new();
+    for (_, prim) in &prim_defs_with_ids {
+        if let Some((parent_path, set, branch)) = &prim.variant_parent {
+            let leaf = prim.path.rsplit('/').next().unwrap_or("");
+            variant_children_map
+                .entry((parent_path.clone(), set.clone(), branch.clone()))
+                .or_default()
+                .push(leaf.to_string());
+        }
     }
 
     for (prim_path, prim) in prim_defs_with_ids {
@@ -991,6 +1221,69 @@ fn load_layer_with_prims(
                 FieldValue::PathListOp(resolve_path_listop(&prim.targets, store)),
             );
         }
+
+        // Process variant selections.
+        for (set_name, selected) in &prim.variant_selections {
+            let set_tok = store.tokens.intern(set_name);
+            let sel_tok = store.tokens.intern(selected);
+            spec.variant_selections.insert(set_tok, sel_tok);
+        }
+
+        // Process variant set names and build VariantSetSpec/VariantSpec entries.
+        // Collect all variant set names (from metadata + variant children + variant fields).
+        let mut all_set_names: Vec<String> = prim.variant_set_names.clone();
+        for (parent, set, _branch) in variant_children_map.keys() {
+            if *parent == prim.path && !all_set_names.contains(set) {
+                all_set_names.push(set.clone());
+            }
+        }
+        for (set, _branch, _attr, _ty) in &prim.variant_fields {
+            if !all_set_names.contains(set) {
+                all_set_names.push(set.clone());
+            }
+        }
+
+        for set_name in &all_set_names {
+            let set_tok = store.tokens.intern(set_name);
+            let set_spec = spec.variant_sets.entry(set_tok).or_default();
+
+            // Find all branches for this set from variant_children_map.
+            for ((parent, s, branch), children) in &variant_children_map {
+                if *parent == prim.path && s == set_name {
+                    let branch_tok = store.tokens.intern(branch);
+                    let variant_spec = set_spec.variants.entry(branch_tok).or_default();
+                    for child_name in children {
+                        let child_tok = store.tokens.intern(child_name);
+                        if !variant_spec.authored_children.contains(&child_tok) {
+                            variant_spec.authored_children.push(child_tok);
+                        }
+                    }
+                }
+            }
+
+            // Add variant branch fields.
+            for (s, branch, attr, ty) in &prim.variant_fields {
+                if s == set_name {
+                    let branch_tok = store.tokens.intern(branch);
+                    let variant_spec = set_spec.variants.entry(branch_tok).or_default();
+                    let attr_tok = store.tokens.intern(attr);
+                    let value = match ty {
+                        VariantFieldType::Double => FieldValue::Value(Value::Float(0.0)),
+                        VariantFieldType::String => {
+                            FieldValue::Value(Value::String("".into()))
+                        }
+                    };
+                    variant_spec.fields.insert(attr_tok, value);
+                }
+            }
+        }
+
+        // Set variant set order.
+        spec.variant_set_order = all_set_names
+            .iter()
+            .map(|n| store.tokens.intern(n))
+            .collect();
+
         layer.prims.insert(prim_path, spec);
     }
 
