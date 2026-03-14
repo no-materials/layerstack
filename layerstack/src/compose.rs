@@ -193,10 +193,17 @@ fn filter_variant_children(
                 }
             });
 
-            // Re-order variant children: children from later variant sets
-            // come first. Build a map from child name to variant set index.
-            if !variant_set_order.is_empty() {
-                let mut child_to_set_idx: HashMap<TokenId, usize> = HashMap::new();
+            // Re-order variant children: use authored order from the selected
+            // variant branch(es). Children from later variant sets come first.
+            // Build an ordered list of selected variant children.
+            let mut ordered_variant_children: Vec<TokenId> = Vec::new();
+
+            // Iterate variant sets in reverse order (later sets' children first).
+            for set_tok in variant_set_order.iter().rev() {
+                let Some(&selected_variant) = selections.get(set_tok) else {
+                    continue;
+                };
+                // Find authored_children for the selected branch from any source.
                 for source in &prim_index.sources {
                     let Some(layer) = store.layer(source.layer_id) else {
                         continue;
@@ -204,35 +211,38 @@ fn filter_variant_children(
                     let Some(spec) = layer.prims.get(&source.spec_path) else {
                         continue;
                     };
-                    for (set_name, set_spec) in &spec.variant_sets {
-                        let set_idx = variant_set_order
-                            .iter()
-                            .position(|s| s == set_name)
-                            .unwrap_or(usize::MAX);
-                        for (_variant_name, variant_spec) in &set_spec.variants {
-                            for child in &variant_spec.authored_children {
-                                child_to_set_idx.entry(*child).or_insert(set_idx);
+                    if let Some(set_spec) = spec.variant_sets.get(set_tok)
+                        && let Some(variant_spec) = set_spec.variants.get(&selected_variant)
+                    {
+                        for child in &variant_spec.authored_children {
+                            if !ordered_variant_children.contains(child) {
+                                ordered_variant_children.push(*child);
                             }
                         }
                     }
                 }
+            }
 
-                // Sort: non-variant children first (preserving order),
-                // then variant children in reverse variant set order.
+            if !ordered_variant_children.is_empty() {
+                // Build a position map for stable sorting.
+                let child_pos: HashMap<TokenId, usize> = ordered_variant_children
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| (*c, i))
+                    .collect();
+
+                // Sort: variant children first (in authored order),
+                // then non-variant children (preserving existing order).
                 child_list.sort_by(|a, b| {
                     let a_leaf = store.paths().resolve(*a).leaf();
                     let b_leaf = store.paths().resolve(*b).leaf();
-                    let a_idx = a_leaf
-                        .and_then(|l| child_to_set_idx.get(&l).copied())
-                        .map(|i| (true, i));
-                    let b_idx = b_leaf
-                        .and_then(|l| child_to_set_idx.get(&l).copied())
-                        .map(|i| (true, i));
-                    match (a_idx, b_idx) {
+                    let a_pos = a_leaf.and_then(|l| child_pos.get(&l).copied());
+                    let b_pos = b_leaf.and_then(|l| child_pos.get(&l).copied());
+                    match (a_pos, b_pos) {
                         (None, None) => Ordering::Equal,
-                        (None, Some(_)) => Ordering::Less,
-                        (Some(_), None) => Ordering::Greater,
-                        (Some((_, ai)), Some((_, bi))) => bi.cmp(&ai),
+                        (None, Some(_)) => Ordering::Greater,
+                        (Some(_), None) => Ordering::Less,
+                        (Some(ai), Some(bi)) => ai.cmp(&bi),
                     }
                 });
             }
@@ -607,6 +617,24 @@ fn add_inherit_edge_opinions(
                 ));
                 for (field, value) in &spec.fields {
                     pending.push((*dest_path_id, *remote_path_id, *field, value.clone()));
+                }
+
+                // Forward variant opinions from selected variants through inherits.
+                let inh_selections =
+                    resolve_variant_selections_for_prim(store, local_stack, *remote_path_id);
+                for (set, selected) in &inh_selections {
+                    if let Some(set_spec) = spec.variant_sets.get(set)
+                        && let Some(variant_spec) = set_spec.variants.get(selected)
+                    {
+                        for (field, value) in &variant_spec.fields {
+                            pending.push((
+                                *dest_path_id,
+                                *remote_path_id,
+                                *field,
+                                value.clone(),
+                            ));
+                        }
+                    }
                 }
             }
         }

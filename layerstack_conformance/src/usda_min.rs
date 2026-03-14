@@ -123,18 +123,11 @@ pub fn load_entry_usda_sublayers_only(entry: &Path) -> LoadedStage {
     }
 }
 
-#[derive(Clone, Debug)]
-enum VariantFieldType {
-    Double,
-    String,
-}
-
 #[derive(Debug)]
 struct PrimDef {
     path: String,
     specifier: layerstack::doc::Specifier,
-    custom_double_attrs: Vec<String>,
-    string_attrs: Vec<String>,
+    attrs: Vec<String>,
     references: ReferencesDef,
     inherits: InheritsDef,
     specializes: SpecializesDef,
@@ -146,8 +139,8 @@ struct PrimDef {
     variant_set_names: Vec<String>,
     /// If this prim is inside a variant branch: (parent_path, set_name, branch_name).
     variant_parent: Option<(String, String, String)>,
-    /// Fields defined inside variant branches of this prim: (set_name, branch_name, attr_name, type).
-    variant_fields: Vec<(String, String, String, VariantFieldType)>,
+    /// Fields defined inside variant branches of this prim: (set_name, branch_name, attr_name).
+    variant_fields: Vec<(String, String, String)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -279,51 +272,52 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
     while let Some(raw) = lines.next() {
         let line = raw.trim();
 
-        // Check if we're inside a variant branch — attrs inside variant branches
-        // should be routed to the parent prim's variant_fields, not its regular fields.
+        // Check if we're inside a variant branch — attrs at the variant-owning
+        // prim's level should be routed to that prim's variant_fields, not its
+        // regular fields. But attrs on child prims nested within a variant
+        // branch are regular attrs of those child prims.
         let variant_ctx = current_variant_context(&brace_stack);
 
-        if let Some((ref set_name, ref branch_name)) = variant_ctx {
-            // Inside a variant branch: route attrs to the parent prim.
-            let parent_path = owning_prim_path(&scope);
-            if let Some(attr) = parse_double_attr(line)
-                && let Some(parent_def) = out.iter_mut().rev().find(|d| d.path == parent_path)
-            {
-                parent_def.variant_fields.push((
-                    set_name.clone(),
-                    branch_name.clone(),
-                    attr,
-                    VariantFieldType::Double,
-                ));
+        // Count how many Prim-level braces sit above the innermost VariantBranch.
+        let prim_depth_in_variant = {
+            let mut depth = 0_u32;
+            let mut found_branch = false;
+            for kind in brace_stack.iter().rev() {
+                match kind {
+                    BraceKind::VariantBranch(..) => {
+                        found_branch = true;
+                        break;
+                    }
+                    BraceKind::Prim => depth += 1,
+                    _ => {}
+                }
             }
-            if let Some(attr) = parse_string_attr(line)
+            if found_branch { depth } else { 0 }
+        };
+
+        if let Some((set_name, branch_name)) = variant_ctx.as_ref()
+            && prim_depth_in_variant == 0
+        {
+            // Directly inside a variant branch (no child prim nesting).
+            let parent_path = owning_prim_path(&scope);
+            if let Some(attr) = parse_any_attr(line)
                 && let Some(parent_def) = out.iter_mut().rev().find(|d| d.path == parent_path)
             {
                 parent_def.variant_fields.push((
                     set_name.clone(),
                     branch_name.clone(),
                     attr,
-                    VariantFieldType::String,
                 ));
             }
         } else {
-            if let Some(attr) = parse_double_attr(line)
+            // Regular prim scope (or a child prim nested inside a variant branch).
+            if let Some(attr) = parse_any_attr(line)
                 && let Some(last) = out.last_mut()
                 && !scope.is_empty()
             {
                 let current_path = format!("/{}", scope.join("/"));
-                if last.path == current_path {
-                    last.custom_double_attrs.push(attr);
-                }
-            }
-
-            if let Some(attr) = parse_string_attr(line)
-                && let Some(last) = out.last_mut()
-                && !scope.is_empty()
-            {
-                let current_path = format!("/{}", scope.join("/"));
-                if last.path == current_path {
-                    last.string_attrs.push(attr);
+                if last.path == current_path && !last.attrs.contains(&attr) {
+                    last.attrs.push(attr);
                 }
             }
         }
@@ -488,8 +482,7 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                         out.push(PrimDef {
                             path: format!("/{}", scope.join("/")),
                             specifier: pending.specifier,
-                            custom_double_attrs: Vec::new(),
-                            string_attrs: Vec::new(),
+                            attrs: Vec::new(),
                             references: pending.references,
                             inherits: pending.inherits,
                             specializes: pending.specializes,
@@ -616,31 +609,42 @@ fn parse_variant_branch_name(line: &str) -> Option<String> {
     }
 }
 
-fn parse_double_attr(line: &str) -> Option<String> {
-    // e.g. `double A_attr`, `custom double A_attr`, or `double radius = 1;`
-    let line = line.trim();
-    let rest = line
-        .strip_prefix("custom double ")
-        .or_else(|| line.strip_prefix("double "))?;
-    let rest = rest.trim();
-    let end = rest
-        .find(|ch: char| ch.is_whitespace() || ch == '=' || ch == ';')
-        .unwrap_or(rest.len());
-    let name = rest[..end].trim();
-    (!name.is_empty()).then(|| name.to_string())
-}
+/// Recognised USDA attribute type keywords (including `custom`/`uniform` prefixes).
+const ATTR_TYPE_PREFIXES: &[&str] = &[
+    "custom uniform token ",
+    "custom uniform string ",
+    "custom uniform int ",
+    "custom uniform double ",
+    "custom uniform float ",
+    "custom uniform bool ",
+    "uniform token ",
+    "uniform string ",
+    "uniform int ",
+    "uniform double ",
+    "uniform float ",
+    "uniform bool ",
+    "custom double ",
+    "custom float ",
+    "custom int ",
+    "custom string ",
+    "custom token ",
+    "custom bool ",
+    "double ",
+    "float ",
+    "int ",
+    "string ",
+    "token ",
+    "bool ",
+];
 
-fn parse_string_attr(line: &str) -> Option<String> {
-    // e.g. `string name`, `custom string name = "x"`, `uniform string name = "x"`,
-    // or `string \"v\" = \"ref\"`.
+fn parse_any_attr(line: &str) -> Option<String> {
     let line = line.trim();
-    let rest = line
-        .strip_prefix("custom uniform string ")
-        .or_else(|| line.strip_prefix("uniform string "))
-        .or_else(|| line.strip_prefix("custom string "))
-        .or_else(|| line.strip_prefix("string "))?
+    let rest = ATTR_TYPE_PREFIXES
+        .iter()
+        .find_map(|prefix| line.strip_prefix(prefix))?
         .trim();
 
+    // Handle quoted attribute names like `string "v" = "ref"`.
     if let Some(rest) = rest.strip_prefix('"') {
         let end = rest.find('"')?;
         let name = rest[..end].trim();
@@ -648,7 +652,7 @@ fn parse_string_attr(line: &str) -> Option<String> {
     }
 
     let end = rest
-        .find(|ch: char| ch.is_whitespace() || ch == '=' || ch == ';')
+        .find(|ch: char| ch.is_whitespace() || ch == '=' || ch == ';' || ch == '.')
         .unwrap_or(rest.len());
     let name = rest[..end].trim();
     (!name.is_empty()).then(|| name.to_string())
@@ -1169,15 +1173,11 @@ fn load_layer_with_prims(
             authored_children: children_by_parent.remove(&prim_path).unwrap_or_default(),
             ..PrimSpec::default()
         };
-        for attr in prim.custom_double_attrs {
+        for attr in prim.attrs {
             let tok = store.tokens.intern(attr);
             spec.fields
-                .insert(tok, FieldValue::Value(Value::Float(0.0)));
-        }
-        for attr in prim.string_attrs {
-            let tok = store.tokens.intern(attr);
-            spec.fields
-                .insert(tok, FieldValue::Value(Value::String("".into())));
+                .entry(tok)
+                .or_insert(FieldValue::Value(Value::Null));
         }
         spec.references = resolve_references(
             &prim.references,
@@ -1237,7 +1237,7 @@ fn load_layer_with_prims(
                 all_set_names.push(set.clone());
             }
         }
-        for (set, _branch, _attr, _ty) in &prim.variant_fields {
+        for (set, _branch, _attr) in &prim.variant_fields {
             if !all_set_names.contains(set) {
                 all_set_names.push(set.clone());
             }
@@ -1262,18 +1262,15 @@ fn load_layer_with_prims(
             }
 
             // Add variant branch fields.
-            for (s, branch, attr, ty) in &prim.variant_fields {
+            for (s, branch, attr) in &prim.variant_fields {
                 if s == set_name {
                     let branch_tok = store.tokens.intern(branch);
                     let variant_spec = set_spec.variants.entry(branch_tok).or_default();
                     let attr_tok = store.tokens.intern(attr);
-                    let value = match ty {
-                        VariantFieldType::Double => FieldValue::Value(Value::Float(0.0)),
-                        VariantFieldType::String => {
-                            FieldValue::Value(Value::String("".into()))
-                        }
-                    };
-                    variant_spec.fields.insert(attr_tok, value);
+                    variant_spec
+                        .fields
+                        .entry(attr_tok)
+                        .or_insert(FieldValue::Value(Value::Null));
                 }
             }
         }

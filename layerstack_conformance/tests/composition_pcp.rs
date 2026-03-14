@@ -504,7 +504,6 @@ fn tricky_variant_selection_in_variant2_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires variant children population through reference arcs"]
 fn basic_variant_with_reference_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("BasicVariantWithReference_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
@@ -543,7 +542,6 @@ fn basic_variant_with_connections_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires variant children ordering refinement"]
 fn tricky_variant_override_of_local_class_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("TrickyVariantOverrideOfLocalClass_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
