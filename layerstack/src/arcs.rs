@@ -70,7 +70,115 @@ pub(crate) fn resolve_references_for_prim(
         };
         ops.push(spec.references.clone());
     }
+
+    // Also check parent's variant specs for child references.
+    let leaf = store.paths().resolve(prim).leaf();
+    let parent = store.paths().resolve(prim).parent();
+    if let (Some(leaf), Some(parent)) = (leaf, parent) {
+        if let Some(parent_id) = store.paths().lookup(&parent) {
+            let parent_selections =
+                resolve_variant_selections_for_prim(store, local_stack, parent_id);
+            for layer_id in &local_stack.layers {
+                let Some(layer) = store.layer(*layer_id) else {
+                    continue;
+                };
+                let Some(parent_spec) = layer.prims.get(&parent_id) else {
+                    continue;
+                };
+                for (set_tok, selected_variant) in &parent_selections {
+                    if let Some(set_spec) = parent_spec.variant_sets.get(set_tok)
+                        && let Some(variant_spec) = set_spec.variants.get(selected_variant)
+                        && let Some(child_refs) = variant_spec.child_references.get(&leaf)
+                    {
+                        ops.push(child_refs.clone());
+                    }
+                }
+            }
+        }
+    }
+
     resolve_list_chain::<Reference>(&[], ops)
+}
+
+/// Resolves variant-scoped child references using a separate stack for variant
+/// selection resolution. This is needed when composing within a reference arc:
+/// the PrimSpec data lives in the remote stack, but variant selections should
+/// come from the combined stack (which includes the referencing layer's
+/// stronger selections).
+pub(crate) fn resolve_variant_child_references(
+    store: &dyn LayerStore,
+    data_stack: &LayerStack,
+    selections_stack: &LayerStack,
+    prim: PathId,
+) -> Vec<Reference> {
+    let leaf = store.paths().resolve(prim).leaf();
+    let parent = store.paths().resolve(prim).parent();
+    let (Some(leaf), Some(parent)) = (leaf, parent) else {
+        return Vec::new();
+    };
+    let Some(parent_id) = store.paths().lookup(&parent) else {
+        return Vec::new();
+    };
+
+    let parent_selections =
+        resolve_variant_selections_for_prim(store, selections_stack, parent_id);
+
+    let mut ops = Vec::new();
+    for layer_id in &data_stack.layers {
+        let Some(layer) = store.layer(*layer_id) else {
+            continue;
+        };
+        let Some(parent_spec) = layer.prims.get(&parent_id) else {
+            continue;
+        };
+        for (set_tok, selected_variant) in &parent_selections {
+            if let Some(set_spec) = parent_spec.variant_sets.get(set_tok)
+                && let Some(variant_spec) = set_spec.variants.get(selected_variant)
+                && let Some(child_refs) = variant_spec.child_references.get(&leaf)
+            {
+                ops.push(child_refs.clone());
+            }
+        }
+    }
+
+    resolve_list_chain::<Reference>(&[], ops)
+}
+
+/// Collects ALL variant-scoped child references for a prim from all variant
+/// branches of its parent, regardless of selection. Used during population
+/// to ensure all potentially-referenced prims are discovered.
+pub(crate) fn collect_all_variant_child_references(
+    store: &dyn LayerStore,
+    local_stack: &LayerStack,
+    prim: PathId,
+) -> Vec<Reference> {
+    let leaf = store.paths().resolve(prim).leaf();
+    let parent = store.paths().resolve(prim).parent();
+    let (Some(leaf), Some(parent)) = (leaf, parent) else {
+        return Vec::new();
+    };
+    let Some(parent_id) = store.paths().lookup(&parent) else {
+        return Vec::new();
+    };
+
+    let mut all_refs = Vec::new();
+    for layer_id in &local_stack.layers {
+        let Some(layer) = store.layer(*layer_id) else {
+            continue;
+        };
+        let Some(parent_spec) = layer.prims.get(&parent_id) else {
+            continue;
+        };
+        for (_set_tok, set_spec) in &parent_spec.variant_sets {
+            for (_variant_tok, variant_spec) in &set_spec.variants {
+                if let Some(child_refs) = variant_spec.child_references.get(&leaf) {
+                    let refs = resolve_list_chain::<Reference>(&[], [child_refs.clone()]);
+                    all_refs.extend(refs);
+                }
+            }
+        }
+    }
+    all_refs
 }
 
 /// Resolves the specializes arc list for a prim across the layer stack.

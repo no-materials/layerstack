@@ -14,7 +14,8 @@ use hashbrown::{HashMap, HashSet};
 use crate::{
     arcs::{
         resolve_inherits_for_prim, resolve_payloads_for_prim, resolve_references_for_prim,
-        resolve_specializes_for_prim, resolve_variant_selections_for_prim,
+        resolve_specializes_for_prim, resolve_variant_child_references,
+        resolve_variant_selections_for_prim,
     },
     doc::{FieldValue, LayerId, LayerStore, Reference},
     interner::TokenId,
@@ -248,6 +249,238 @@ fn filter_variant_children(
             }
         }
     }
+
+    // Second pass: filter children based on parent's variant-scoped
+    // child_authored_children. When a prim's parent has variant sets with
+    // child_authored_children entries for this prim, grandchild prims that
+    // are not in the selected variant branch should be removed.
+    let parent_paths2: Vec<PathId> = children.keys().copied().collect();
+    for parent_path in parent_paths2 {
+        let parent_leaf = store.paths().resolve(parent_path).leaf();
+        let grandparent = store.paths().resolve(parent_path).parent();
+        let (Some(leaf), Some(gp)) = (parent_leaf, grandparent) else {
+            continue;
+        };
+        let Some(gp_id) = store.paths().lookup(&gp) else {
+            continue;
+        };
+        let Some(gp_index) = prims.get(&gp_id) else {
+            continue;
+        };
+
+        // Resolve grandparent's variant selections.
+        let mut gp_selections: HashMap<TokenId, TokenId> = HashMap::new();
+        for source in &gp_index.sources {
+            let Some(layer) = store.layer(source.layer_id) else {
+                continue;
+            };
+            let Some(spec) = layer.prims.get(&source.spec_path) else {
+                continue;
+            };
+            for (set, variant) in &spec.variant_selections {
+                gp_selections.entry(*set).or_insert(*variant);
+            }
+        }
+
+        // Collect all and selected grandchild authored children.
+        let mut all_gc: HashSet<TokenId> = HashSet::new();
+        let mut selected_gc: HashSet<TokenId> = HashSet::new();
+        let mut has_gc = false;
+
+        for source in &gp_index.sources {
+            let Some(layer) = store.layer(source.layer_id) else {
+                continue;
+            };
+            let Some(spec) = layer.prims.get(&source.spec_path) else {
+                continue;
+            };
+            for (set_name, set_spec) in &spec.variant_sets {
+                for (variant_name, variant_spec) in &set_spec.variants {
+                    if let Some(gc_list) = variant_spec.child_authored_children.get(&leaf) {
+                        has_gc = true;
+                        for gc in gc_list {
+                            all_gc.insert(*gc);
+                            if gp_selections.get(set_name) == Some(variant_name) {
+                                selected_gc.insert(*gc);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !has_gc {
+            continue;
+        }
+
+        let unselected_gc: HashSet<TokenId> =
+            all_gc.difference(&selected_gc).copied().collect();
+        if unselected_gc.is_empty() {
+            continue;
+        }
+
+        if let Some(child_list) = children.get_mut(&parent_path) {
+            child_list.retain(|child_path| {
+                let child = store.paths().resolve(*child_path);
+                if let Some(child_leaf) = child.leaf() {
+                    !unselected_gc.contains(&child_leaf)
+                } else {
+                    true
+                }
+            });
+
+            // Re-order: variant-scoped grandchildren should come after
+            // non-variant children (e.g. children from references).
+            let (gc_children, other_children): (Vec<_>, Vec<_>) =
+                child_list.iter().copied().partition(|child_path| {
+                    let child = store.paths().resolve(*child_path);
+                    child
+                        .leaf()
+                        .map(|l| selected_gc.contains(&l))
+                        .unwrap_or(false)
+                });
+            *child_list = other_children;
+            child_list.extend(gc_children);
+        }
+    }
+
+    // Third pass: for prims that inherit or specialize from another prim,
+    // remove any children that exist under the destination but were filtered
+    // out from the source's children. This handles the case where variant
+    // children of an inherited class are filtered at the class level but
+    // still appear under the inheriting prim.
+    let parent_paths3: Vec<PathId> = children.keys().copied().collect();
+    for parent_path in parent_paths3 {
+        let Some(prim_index) = prims.get(&parent_path) else {
+            continue;
+        };
+
+        // Check all sources for inherit/specialize arcs by looking at the
+        // prim's opinion sources for inherit-kind arcs.
+        let mut inherited_sources: Vec<PathId> = Vec::new();
+        for source in &prim_index.sources {
+            if source.arc_kind == ArcKind::Inherits
+                || source.arc_kind == ArcKind::Specializes
+                || source.nested_arc_kind == Some(ArcKind::Inherits)
+                || source.nested_arc_kind == Some(ArcKind::Specializes)
+            {
+                // The spec_path points to the source prim in its original namespace.
+                // We need the mapped path in the same namespace as parent_path.
+                // The source might be in a different namespace (e.g. /Model/Class
+                // for /Model/Scope). We need the direct inherit source path.
+                if source.spec_path != parent_path {
+                    inherited_sources.push(source.spec_path);
+                }
+            }
+        }
+
+        if inherited_sources.is_empty() {
+            continue;
+        }
+
+        // For each inherited source, check which of its children survived filtering.
+        let mut to_remove: HashSet<TokenId> = HashSet::new();
+        for src_path in &inherited_sources {
+            let src_children = children.get(src_path);
+            if let Some(src_child_list) = src_children {
+                let src_leaves: HashSet<TokenId> = src_child_list
+                    .iter()
+                    .filter_map(|c| store.paths().resolve(*c).leaf())
+                    .collect();
+
+                // Any child of parent_path whose leaf matches a child that was
+                // present at the source but got filtered out should be removed.
+                if let Some(dest_child_list) = children.get(&parent_path) {
+                    for child in dest_child_list {
+                        let child_leaf = store.paths().resolve(*child).leaf();
+                        if let Some(leaf) = child_leaf {
+                            // Check if this child comes from inheritance by checking
+                            // if the source prim originally had a path with this leaf
+                            // as a child. If the source no longer has it (filtered),
+                            // but the source's parent's variants had it, remove it.
+                            let src_child_path = {
+                                let sp = store.paths().resolve(*src_path).clone();
+                                sp.join(&[leaf])
+                            };
+                            let src_child_id = store.paths().lookup(&src_child_path);
+                            if let Some(sc_id) = src_child_id {
+                                // Source namespace has this path, but it's not in
+                                // source's filtered children → it was filtered out.
+                                if !src_leaves.contains(&leaf)
+                                    && prims.contains_key(&sc_id)
+                                {
+                                    to_remove.insert(leaf);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !to_remove.is_empty() {
+            if let Some(child_list) = children.get_mut(&parent_path) {
+                child_list.retain(|child| {
+                    let leaf = store.paths().resolve(*child).leaf();
+                    leaf.map(|l| !to_remove.contains(&l)).unwrap_or(true)
+                });
+            }
+        }
+
+        // Reorder: children from the prim's own arcs come before children
+        // inherited from the source prim. Use the source's filtered child
+        // list to identify which children are inherited.
+        let inherited_leaves: HashSet<TokenId> = inherited_sources
+            .iter()
+            .filter_map(|src| children.get(src))
+            .flat_map(|list| list.iter())
+            .filter_map(|c| store.paths().resolve(*c).leaf())
+            .collect();
+
+        // Collect the source's child order for inherited children.
+        let src_order: Vec<TokenId> = inherited_sources
+            .iter()
+            .filter_map(|src| children.get(src))
+            .flat_map(|list| list.iter())
+            .filter_map(|c| store.paths().resolve(*c).leaf())
+            .collect();
+
+        if !inherited_leaves.is_empty() {
+            if let Some(child_list) = children.get_mut(&parent_path) {
+                // Only apply partition+reorder when there are children that
+                // exist ONLY as direct children (not from inheritance). When
+                // all children also exist in the inherited source, the normal
+                // `apply_child_order` with `prim_order` opinions handles
+                // ordering correctly.
+                let has_direct_only = child_list.iter().any(|child| {
+                    let leaf = store.paths().resolve(*child).leaf();
+                    leaf.map(|l| !inherited_leaves.contains(&l)).unwrap_or(false)
+                });
+
+                if has_direct_only {
+                    let (direct, mut inherited): (Vec<_>, Vec<_>) =
+                        child_list.iter().copied().partition(|child| {
+                            let leaf = store.paths().resolve(*child).leaf();
+                            leaf.map(|l| !inherited_leaves.contains(&l)).unwrap_or(true)
+                        });
+
+                    // Sort inherited children to match the source's child order.
+                    inherited.sort_by(|a, b| {
+                        let a_leaf = store.paths().resolve(*a).leaf();
+                        let b_leaf = store.paths().resolve(*b).leaf();
+                        let a_pos = a_leaf
+                            .and_then(|l| src_order.iter().position(|s| *s == l));
+                        let b_pos = b_leaf
+                            .and_then(|l| src_order.iter().position(|s| *s == l));
+                        a_pos.cmp(&b_pos)
+                    });
+
+                    *child_list = direct;
+                    child_list.extend(inherited);
+                }
+            }
+        }
+    }
 }
 
 /// Resolves variant selections considering both the local layer stack and
@@ -418,6 +651,83 @@ fn add_local_and_variant_opinions(
                             field: *field,
                             value: value.clone(),
                         });
+                }
+
+                // Forward variant-scoped child prim fields.
+                let path_obj = store.paths().resolve(path).clone();
+                for (child_tok, child_fields) in &variant_spec.child_fields {
+                    let child_path = path_obj.join(&[*child_tok]);
+                    if let Some(child_path_id) = store.paths().lookup(&child_path) {
+                        if out.contains_key(&child_path_id) {
+                            let child_ns_depth = u16::try_from(
+                                store.paths().resolve(child_path_id).depth(),
+                            )
+                            .unwrap_or(u16::MAX);
+                            for (field, value) in child_fields {
+                                out.get_mut(&child_path_id)
+                                    .expect("path exists")
+                                    .add_opinion(Opinion {
+                                        key: OpinionKey {
+                                            is_local: false,
+                                            arc_kind: ArcKind::Variants,
+                                            nested_arc_kind: None,
+                                            namespace_depth: child_ns_depth,
+                                            authored: true,
+                                            arc_list_index: 0,
+                                            layer_strength,
+                                            layer_id,
+                                            spec_path: child_path_id,
+                                        },
+                                        field: *field,
+                                        value: value.clone(),
+                                    });
+                            }
+                            out.get_mut(&child_path_id)
+                                .expect("path exists")
+                                .add_source(OpinionKey {
+                                    is_local: false,
+                                    arc_kind: ArcKind::Variants,
+                                    nested_arc_kind: None,
+                                    namespace_depth: child_ns_depth,
+                                    authored: true,
+                                    arc_list_index: 0,
+                                    layer_strength,
+                                    layer_id,
+                                    spec_path: child_path_id,
+                                });
+                        }
+                    }
+                }
+
+                // Forward variant-scoped child_authored_children as
+                // authored_children opinions on the child path.
+                for (child_tok, gc_list) in &variant_spec.child_authored_children {
+                    let child_path = path_obj.join(&[*child_tok]);
+                    if let Some(child_path_id) = store.paths().lookup(&child_path) {
+                        if out.contains_key(&child_path_id) {
+                            let child_ns_depth = u16::try_from(
+                                store.paths().resolve(child_path_id).depth(),
+                            )
+                            .unwrap_or(u16::MAX);
+                            authored_children_out
+                                .entry(child_path_id)
+                                .or_default()
+                                .push((
+                                    OpinionKey {
+                                        is_local: false,
+                                        arc_kind: ArcKind::Variants,
+                                        nested_arc_kind: None,
+                                        namespace_depth: child_ns_depth,
+                                        authored: true,
+                                        arc_list_index: 0,
+                                        layer_strength,
+                                        layer_id,
+                                        spec_path: path,
+                                    },
+                                    gc_list.clone(),
+                                ));
+                        }
+                    }
                 }
             }
         }
@@ -636,6 +946,43 @@ fn add_inherit_edge_opinions(
                         }
                     }
                 }
+
+                // Forward child_fields from the parent's variant specs through
+                // inherits. When the inherited prim is a child whose parent has
+                // variant sets with child_fields targeting this child, those
+                // fields need to propagate through the inherit arc.
+                let remote_path = store.paths().resolve(*remote_path_id).clone();
+                if let Some(remote_leaf) = remote_path.leaf() {
+                    if let Some(remote_parent) = remote_path.parent() {
+                        if let Some(remote_parent_id) = store.paths().lookup(&remote_parent) {
+                            if let Some(parent_spec) = layer.prims.get(&remote_parent_id) {
+                                let parent_selections =
+                                    resolve_variant_selections_for_prim(
+                                        store,
+                                        local_stack,
+                                        remote_parent_id,
+                                    );
+                                for (set, selected) in &parent_selections {
+                                    if let Some(set_spec) = parent_spec.variant_sets.get(set)
+                                        && let Some(variant_spec) =
+                                            set_spec.variants.get(selected)
+                                        && let Some(child_fields) =
+                                            variant_spec.child_fields.get(&remote_leaf)
+                                    {
+                                        for (field, value) in child_fields {
+                                            pending.push((
+                                                *dest_path_id,
+                                                *remote_path_id,
+                                                *field,
+                                                value.clone(),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -667,7 +1014,7 @@ fn add_inherit_edge_opinions(
         }
     }
 
-    for (remote_path_id, dest_path_id) in mapping {
+    for &(remote_path_id, dest_path_id) in &mapping {
         let nested_inherits = resolve_inherits_for_prim(store, local_stack, remote_path_id);
         for (nested_index, nested) in nested_inherits.into_iter().enumerate() {
             let nested_index = u16::try_from(nested_index).unwrap_or(u16::MAX);
@@ -820,6 +1167,72 @@ fn add_inherit_edge_opinions(
                 prim_order_out,
                 authored_children_out,
             );
+        }
+    }
+
+    // Propagate opinions for paths that exist in the PrimIndex (from reference
+    // expansion) but not in any layer's PrimSpec. These are reference-introduced
+    // children of the inherited source that need to be mapped to the destination.
+    let mapping_set: HashSet<PathId> = mapping.iter().map(|(r, _)| *r).collect();
+    let all_out_paths: Vec<PathId> = out.keys().copied().collect();
+    for src_path_id in all_out_paths {
+        if mapping_set.contains(&src_path_id) {
+            continue;
+        }
+        let rel: Vec<_> = {
+            let src_path = store.paths().resolve(src_path_id);
+            let Some(rel) = src_path.strip_prefix(&inherited_path) else {
+                continue;
+            };
+            if rel.is_empty() {
+                continue;
+            }
+            rel.to_vec()
+        };
+        let dest_path_id = store.paths_mut().intern(base_path.join(&rel));
+        if !out.contains_key(&dest_path_id) {
+            continue;
+        }
+
+        // Copy sources and opinions from the source PrimIndex entry.
+        let src_index = out.get(&src_path_id).cloned();
+        if let Some(src_index) = src_index {
+            for source in &src_index.sources {
+                out.get_mut(&dest_path_id)
+                    .expect("path exists")
+                    .add_source(OpinionKey {
+                        is_local: false,
+                        arc_kind,
+                        nested_arc_kind: Some(source.arc_kind),
+                        namespace_depth,
+                        authored: true,
+                        arc_list_index,
+                        layer_strength: source.layer_strength,
+                        layer_id: source.layer_id,
+                        spec_path: source.spec_path,
+                    });
+            }
+            for (field, opinions) in &src_index.opinions_by_field {
+                for opinion in opinions {
+                    out.get_mut(&dest_path_id)
+                        .expect("path exists")
+                        .add_opinion(Opinion {
+                            key: OpinionKey {
+                                is_local: false,
+                                arc_kind,
+                                nested_arc_kind: Some(opinion.key.arc_kind),
+                                namespace_depth,
+                                authored: true,
+                                arc_list_index,
+                                layer_strength: opinion.key.layer_strength,
+                                layer_id: opinion.key.layer_id,
+                                spec_path: opinion.key.spec_path,
+                            },
+                            field: *field,
+                            value: opinion.value.clone(),
+                        });
+                }
+            }
         }
     }
 }
@@ -1012,6 +1425,83 @@ fn add_reference_edge_opinions(
                                     value: value.clone(),
                                 });
                         }
+
+                        // Forward child_authored_children as authored_children
+                        // opinions on child paths.
+                        let ref_path_obj = store.paths().resolve(*dest_path_id).clone();
+                        for (child_tok, gc_list) in &variant_spec.child_authored_children {
+                            let child_path = ref_path_obj.join(&[*child_tok]);
+                            if let Some(child_path_id) = store.paths().lookup(&child_path) {
+                                if out.contains_key(&child_path_id) {
+                                    let child_ns = u16::try_from(
+                                        store.paths().resolve(child_path_id).depth(),
+                                    )
+                                    .unwrap_or(u16::MAX);
+                                    authored_children_out
+                                        .entry(child_path_id)
+                                        .or_default()
+                                        .push((
+                                            OpinionKey {
+                                                is_local: false,
+                                                arc_kind: ArcKind::References,
+                                                nested_arc_kind: Some(ArcKind::Variants),
+                                                namespace_depth: child_ns,
+                                                authored: true,
+                                                arc_list_index,
+                                                layer_strength,
+                                                layer_id: remote_layer_id,
+                                                spec_path: *remote_path_id,
+                                            },
+                                            gc_list.clone(),
+                                        ));
+                                }
+                            }
+                        }
+
+                        // Forward child_fields to child paths.
+                        for (child_tok, child_fields) in &variant_spec.child_fields {
+                            let child_path = ref_path_obj.join(&[*child_tok]);
+                            if let Some(child_path_id) = store.paths().lookup(&child_path) {
+                                if out.contains_key(&child_path_id) {
+                                    let child_ns = u16::try_from(
+                                        store.paths().resolve(child_path_id).depth(),
+                                    )
+                                    .unwrap_or(u16::MAX);
+                                    for (field, value) in child_fields {
+                                        out.get_mut(&child_path_id)
+                                            .expect("path exists")
+                                            .add_opinion(Opinion {
+                                                key: OpinionKey {
+                                                    is_local: false,
+                                                    arc_kind: ArcKind::References,
+                                                    nested_arc_kind: Some(ArcKind::Variants),
+                                                    namespace_depth: child_ns,
+                                                    authored: true,
+                                                    arc_list_index,
+                                                    layer_strength,
+                                                    layer_id: remote_layer_id,
+                                                    spec_path: child_path_id,
+                                                },
+                                                field: *field,
+                                                value: value.clone(),
+                                            });
+                                    }
+                                    out.get_mut(&child_path_id)
+                                        .expect("path exists")
+                                        .add_source(OpinionKey {
+                                            is_local: false,
+                                            arc_kind: ArcKind::References,
+                                            nested_arc_kind: Some(ArcKind::Variants),
+                                            namespace_depth: child_ns,
+                                            authored: true,
+                                            arc_list_index,
+                                            layer_strength,
+                                            layer_id: remote_layer_id,
+                                            spec_path: child_path_id,
+                                        });
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1109,14 +1599,20 @@ fn add_reference_edge_opinions(
         }
 
         let nested = resolve_references_for_prim(store, &remote_stack, remote_path_id);
-        for (nested_index, nested_ref) in nested.into_iter().enumerate() {
+        // Also resolve variant-scoped child references using combined_stack
+        // for selections, so referencing layer's variant selections override
+        // the referenced layer's defaults.
+        let variant_child_refs = resolve_variant_child_references(
+            store,
+            &remote_stack,
+            &combined_stack,
+            remote_path_id,
+        );
+        let all_nested = nested.into_iter().chain(variant_child_refs);
+        for (nested_index, nested_ref) in all_nested.enumerate() {
             let nested_index = u16::try_from(nested_index).unwrap_or(u16::MAX);
             let namespace_depth =
                 u16::try_from(store.paths().resolve(dest_path_id).depth()).unwrap_or(u16::MAX);
-            // Pass combined_stack so that nested references can discover
-            // opinions from intermediate reference layers (e.g. inherits and
-            // specializes arcs that resolve paths defined in the parent
-            // reference's layer).
             add_reference_edge_opinions(
                 store,
                 &combined_stack,

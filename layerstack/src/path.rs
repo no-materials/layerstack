@@ -170,6 +170,12 @@ impl PathInterner {
     pub fn resolve(&self, id: PathId) -> &Path {
         &self.paths[usize::try_from(id.0).expect("path id out of range")]
     }
+
+    /// Looks up a path without interning. Returns `None` if the path hasn't been interned.
+    #[must_use]
+    pub fn lookup(&self, path: &Path) -> Option<PathId> {
+        self.by_path.get(path).copied()
+    }
 }
 
 /// Errors that can occur when parsing a path.

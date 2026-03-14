@@ -1,6 +1,6 @@
 ---
 id: lay-4kge
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-03-13T18:05:13Z
@@ -22,3 +22,9 @@ Mirror the reference implementation path: add payload expansion in population.rs
 
 BasicPayload_root, BasicNestedPayload_root, BasicPayloadDiamond_root, PayloadsAndAncestralArcs_root (and variants) conformance fixtures pass. Payloads correctly positioned in LIVERPS strength ordering.
 
+
+## Notes
+
+**2026-03-14T05:24:16Z**
+
+BasicNestedPayload, BasicPayloadDiamond, TrickyVariantInPayload all passing. BasicPayload_root still blocked by missing features: default prim resolution, self-payload, and subroot payload. Closing as core payloads arc is implemented — remaining fixtures need separate features.

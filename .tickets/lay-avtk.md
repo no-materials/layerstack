@@ -21,3 +21,13 @@ Value resolution sits on top of composition. The Stage API needs to accept a tim
 
 Upstream value_resolution test fixtures pass. Time-varying queries return correct interpolated values. Value blocking correctly skips weaker opinions and falls back.
 
+
+## Notes
+
+**2026-03-14T04:41:59Z**
+
+Interpolation methods (lay-2b56) closed: Held + Linear interpolation implemented with TimeSamples support in 4b98875.
+
+**2026-03-14T04:51:33Z**
+
+TimeSamples resolution (lay-n7r4) closed: timeSamples parsing + FieldValue::TimeSamples + resolve_value_at_time in 0cb2835.

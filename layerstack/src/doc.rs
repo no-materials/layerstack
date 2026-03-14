@@ -122,6 +122,33 @@ pub struct VariantSpec {
     ///
     /// These children are only populated when this variant is selected.
     pub authored_children: Vec<TokenId>,
+    /// Composition arcs for child prims within this variant branch.
+    ///
+    /// When a child prim (e.g. `over "Child" (add references = ...)`) appears
+    /// inside a variant branch, its composition arcs are stored here keyed by
+    /// the child prim name. These arcs apply only when this variant is selected.
+    ///
+    /// Spec: AOUSD Core §10.5 (variant arcs on child prims).
+    pub child_references: HashMap<TokenId, ListOp<Reference>>,
+    /// Inherits arcs for child prims within this variant branch.
+    pub child_inherits: HashMap<TokenId, ListOp<PathId>>,
+    /// Payloads for child prims within this variant branch.
+    pub child_payloads: HashMap<TokenId, ListOp<Reference>>,
+    /// Specializes arcs for child prims within this variant branch.
+    pub child_specializes: HashMap<TokenId, ListOp<PathId>>,
+    /// Authored children for child prims within this variant branch.
+    ///
+    /// When a child prim (e.g. `over "Child" { def "Grandchild" {} }`) inside
+    /// a variant branch introduces grandchild prims, they are recorded here
+    /// keyed by the child prim name. These grandchildren are only visible when
+    /// this variant is selected.
+    pub child_authored_children: HashMap<TokenId, Vec<TokenId>>,
+    /// Field opinions for child prims within this variant branch.
+    ///
+    /// When a child prim (e.g. `class "Child" { bool attr = 0 }`) inside a
+    /// variant branch defines field values, they are recorded here keyed by the
+    /// child prim name. These opinions apply only when this variant is selected.
+    pub child_fields: HashMap<TokenId, HashMap<TokenId, FieldValue>>,
 }
 
 /// A variant set: a named collection of variants.

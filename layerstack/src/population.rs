@@ -11,8 +11,8 @@ use hashbrown::{HashMap, HashSet};
 
 use crate::{
     arcs::{
-        resolve_inherits_for_prim, resolve_payloads_for_prim, resolve_references_for_prim,
-        resolve_specializes_for_prim,
+        collect_all_variant_child_references, resolve_inherits_for_prim,
+        resolve_payloads_for_prim, resolve_references_for_prim, resolve_specializes_for_prim,
     },
     doc::LayerStore,
     doc::{LayerId, Reference},
@@ -85,6 +85,23 @@ fn gather_populated_paths(
             );
         }
 
+        // Also expand references from ALL variant branches of this prim's
+        // parent, regardless of which variant is currently selected. This
+        // ensures that paths introduced by variant-scoped child references
+        // are discovered during population.
+        let variant_refs = collect_all_variant_child_references(store, local_stack, path);
+        for reference in variant_refs {
+            expand_reference_paths(
+                store,
+                path,
+                reference,
+                &mut paths,
+                &mut queue,
+                &mut visited_refs,
+                &mut visited_inherits,
+            );
+        }
+
         // Payloads behave like references for population purposes.
         // Spec: AOUSD Core §10 (payloads arc, §5.1.22).
         let payloads = resolve_payloads_for_prim(store, local_stack, path);
@@ -112,6 +129,33 @@ fn gather_populated_paths(
                 &mut paths,
                 &mut queue,
                 &mut visited_inherits,
+            );
+        }
+    }
+
+    // Second pass: propagate reference-introduced paths through inherits.
+    // After the main loop, some paths may have been introduced by references
+    // under an inherit source but not yet mapped to the inherit destination.
+    // The visited_inherits set contains all (dest, src) inherit/specializes
+    // pairs discovered during population.
+    let inherit_pairs: Vec<(PathId, PathId)> = visited_inherits.into_iter().collect();
+    propagate_populated_through_inherits(store, &inherit_pairs, &mut paths, &mut queue);
+
+    // Process any newly added paths from inherit propagation.
+    while idx < queue.len() {
+        let path = queue[idx];
+        idx += 1;
+
+        let inherits = resolve_inherits_for_prim(store, local_stack, path);
+        for inherited_root in inherits {
+            expand_inherit_paths(
+                store,
+                local_stack,
+                path,
+                inherited_root,
+                &mut paths,
+                &mut queue,
+                &mut HashSet::new(),
             );
         }
     }
@@ -248,10 +292,71 @@ fn expand_reference_paths(
                 visited_inherits,
             );
         }
+
+        // Expand variant-scoped child references from ALL variant branches.
+        let variant_refs =
+            collect_all_variant_child_references(store, &remote_stack, remote_path_id);
+        for nested in variant_refs {
+            expand_reference_paths(
+                store,
+                dest_path_id,
+                nested,
+                paths,
+                queue,
+                visited,
+                visited_inherits,
+            );
+        }
     }
 
     // Note: `paths_mut()` borrows the store mutably, so we materialize any
     // `strip_prefix` results before interning to avoid borrow conflicts.
+}
+
+/// After the main queue loop, some paths introduced by references may exist
+/// under an inherit source (e.g. `/Model/Class/RefFromHighClassStuff`) but
+/// not yet be mapped to the inherit destination (e.g. `/Model/Scope/RefFromHighClassStuff`).
+///
+/// This function takes a set of (destination, source) inherit/specializes
+/// pairs collected during population and propagates populated paths through them.
+fn propagate_populated_through_inherits(
+    store: &mut dyn LayerStore,
+    inherit_pairs: &[(PathId, PathId)],
+    paths: &mut BTreeSet<PathId>,
+    queue: &mut Vec<PathId>,
+) {
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let snapshot: Vec<PathId> = paths.iter().copied().collect();
+        for (dest, src) in inherit_pairs {
+            let dest_root = store.paths().resolve(*dest).clone();
+            let src_root = store.paths().resolve(*src).clone();
+            let mut to_add = Vec::new();
+            for populated in &snapshot {
+                let rel: Vec<_> = {
+                    let pop_path = store.paths().resolve(*populated);
+                    let Some(rel) = pop_path.strip_prefix(&src_root) else {
+                        continue;
+                    };
+                    if rel.is_empty() {
+                        continue;
+                    }
+                    rel.to_vec()
+                };
+                let dest_path = dest_root.join(&rel);
+                let dest_id = store.paths_mut().intern(dest_path);
+                if !paths.contains(&dest_id) {
+                    to_add.push(dest_id);
+                }
+            }
+            for id in to_add {
+                paths.insert(id);
+                queue.push(id);
+                changed = true;
+            }
+        }
+    }
 }
 
 fn add_ancestor_paths(store: &mut dyn LayerStore, paths: &mut BTreeSet<PathId>) {

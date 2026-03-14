@@ -21,3 +21,9 @@ Follow existing arc implementation patterns in compose.rs and population.rs. Eac
 
 All upstream composition fixtures for payloads, specializes, and relocates pass. LIVERPS ordering fully enforced per §10.4.
 
+
+## Notes
+
+**2026-03-14T01:57:11Z**
+
+Variant children filtering + variant opinion forwarding committed (81701d8). VariantSets arc now correctly: parses variant selections/ordering/branches, filters children to selected branches, forwards variant opinions through references. 4 new conformance tests passing: TrickyVariantAncestralSelection, BasicSpecializesAndVariants, TrickyVariantWeakerSelection3, TrickyVariantInPayload.
