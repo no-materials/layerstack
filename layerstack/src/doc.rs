@@ -81,7 +81,7 @@ pub enum FieldValue {
     PathListOp(ListOp<PathId>),
     /// Time-varying samples: sorted `(timeCode, value)` pairs.
     ///
-    /// TimeSamples take priority over default values per §12.3.
+    /// `TimeSamples` take priority over default values per §12.3.
     /// Interpolation between samples uses the layer's interpolation type
     /// (Held or Linear, §12.5).
     ///

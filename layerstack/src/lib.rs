@@ -32,6 +32,8 @@ pub mod population;
 pub mod prim_index;
 pub mod stage;
 
+pub mod live_stage;
+
 pub use dependency_map::DependencyMap;
 pub use doc::{
     FieldValue, InMemoryStore, InterpolationType, Layer, LayerId, PrimSpec, Reference, Specifier,
@@ -43,3 +45,5 @@ pub use listop::ListOp;
 pub use path::{Path, PathId, PathInterner};
 pub use prim_index::{ArcKind, Opinion, OpinionKey};
 pub use stage::{Resolved, ResolvedValue, Stage, StageOptions};
+
+pub use live_stage::LiveStage;

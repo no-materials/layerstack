@@ -18,7 +18,7 @@ use crate::{
         resolve_variant_branch_references, resolve_variant_child_references,
         resolve_variant_selections_for_prim,
     },
-    dependency_map::{ArcDependency, DependencyMapBuilder, LayerDependency},
+    dependency_map::{ArcDependency, DependencyMapBuilder},
     doc::{FieldValue, LayerId, LayerStore, Reference},
     interner::TokenId,
     layer_stack::LayerStack,
@@ -209,7 +209,7 @@ fn filter_variant_children(
                             let outer_ok = variant_spec
                                 .required_outer_selections
                                 .get(child)
-                                .map_or(true, |reqs| {
+                                .is_none_or(|reqs| {
                                     reqs.iter().all(|(s, v)| selections.get(s) == Some(v))
                                 });
                             if outer_ok {
@@ -502,13 +502,13 @@ fn filter_variant_children(
             }
         }
 
-        if !to_remove.is_empty() {
-            if let Some(child_list) = children.get_mut(&parent_path) {
-                child_list.retain(|child| {
-                    let leaf = store.paths().resolve(*child).leaf();
-                    leaf.map(|l| !to_remove.contains(&l)).unwrap_or(true)
-                });
-            }
+        if !to_remove.is_empty()
+            && let Some(child_list) = children.get_mut(&parent_path)
+        {
+            child_list.retain(|child| {
+                let leaf = store.paths().resolve(*child).leaf();
+                leaf.map(|l| !to_remove.contains(&l)).unwrap_or(true)
+            });
         }
 
         // Reorder: children from the prim's own arcs come before children
@@ -529,38 +529,38 @@ fn filter_variant_children(
             .filter_map(|c| store.paths().resolve(*c).leaf())
             .collect();
 
-        if !inherited_leaves.is_empty() {
-            if let Some(child_list) = children.get_mut(&parent_path) {
-                // Only apply partition+reorder when there are children that
-                // exist ONLY as direct children (not from inheritance). When
-                // all children also exist in the inherited source, the normal
-                // `apply_child_order` with `prim_order` opinions handles
-                // ordering correctly.
-                let has_direct_only = child_list.iter().any(|child| {
-                    let leaf = store.paths().resolve(*child).leaf();
-                    leaf.map(|l| !inherited_leaves.contains(&l))
-                        .unwrap_or(false)
-                });
+        if !inherited_leaves.is_empty()
+            && let Some(child_list) = children.get_mut(&parent_path)
+        {
+            // Only apply partition+reorder when there are children that
+            // exist ONLY as direct children (not from inheritance). When
+            // all children also exist in the inherited source, the normal
+            // `apply_child_order` with `prim_order` opinions handles
+            // ordering correctly.
+            let has_direct_only = child_list.iter().any(|child| {
+                let leaf = store.paths().resolve(*child).leaf();
+                leaf.map(|l| !inherited_leaves.contains(&l))
+                    .unwrap_or(false)
+            });
 
-                if has_direct_only {
-                    let (direct, mut inherited): (Vec<_>, Vec<_>) =
-                        child_list.iter().copied().partition(|child| {
-                            let leaf = store.paths().resolve(*child).leaf();
-                            leaf.map(|l| !inherited_leaves.contains(&l)).unwrap_or(true)
-                        });
-
-                    // Sort inherited children to match the source's child order.
-                    inherited.sort_by(|a, b| {
-                        let a_leaf = store.paths().resolve(*a).leaf();
-                        let b_leaf = store.paths().resolve(*b).leaf();
-                        let a_pos = a_leaf.and_then(|l| src_order.iter().position(|s| *s == l));
-                        let b_pos = b_leaf.and_then(|l| src_order.iter().position(|s| *s == l));
-                        a_pos.cmp(&b_pos)
+            if has_direct_only {
+                let (direct, mut inherited): (Vec<_>, Vec<_>) =
+                    child_list.iter().copied().partition(|child| {
+                        let leaf = store.paths().resolve(*child).leaf();
+                        leaf.map(|l| !inherited_leaves.contains(&l)).unwrap_or(true)
                     });
 
-                    *child_list = direct;
-                    child_list.extend(inherited);
-                }
+                // Sort inherited children to match the source's child order.
+                inherited.sort_by(|a, b| {
+                    let a_leaf = store.paths().resolve(*a).leaf();
+                    let b_leaf = store.paths().resolve(*b).leaf();
+                    let a_pos = a_leaf.and_then(|l| src_order.iter().position(|s| *s == l));
+                    let b_pos = b_leaf.and_then(|l| src_order.iter().position(|s| *s == l));
+                    a_pos.cmp(&b_pos)
+                });
+
+                *child_list = direct;
+                child_list.extend(inherited);
             }
         }
     }
@@ -701,10 +701,7 @@ fn add_local_and_variant_opinions(
             };
 
             if let Some(d) = deps.as_deref_mut() {
-                d.add_layer_opinion(LayerDependency {
-                    layer: layer_id,
-                    prim: path,
-                });
+                d.add_layer_opinion(layer_id, path);
             }
 
             let layer_strength = u16::try_from(layer_strength).unwrap_or(u16::MAX);
@@ -822,61 +819,17 @@ fn add_local_and_variant_opinions(
                 let path_obj = store.paths().resolve(path).clone();
                 for (child_tok, child_fields) in &variant_spec.child_fields {
                     let child_path = path_obj.join(&[*child_tok]);
-                    if let Some(child_path_id) = store.paths().lookup(&child_path) {
-                        if out.contains_key(&child_path_id) {
-                            let child_ns_depth =
-                                u16::try_from(store.paths().resolve(child_path_id).depth())
-                                    .unwrap_or(u16::MAX);
-                            for (field, value) in child_fields {
-                                out.get_mut(&child_path_id)
-                                    .expect("path exists")
-                                    .add_opinion(Opinion {
-                                        key: OpinionKey {
-                                            is_local: false,
-                                            arc_kind: ArcKind::Variants,
-                                            nested_arc_kind: None,
-                                            namespace_depth: child_ns_depth,
-                                            authored: true,
-                                            arc_list_index: 0,
-                                            layer_strength,
-                                            layer_id,
-                                            spec_path: child_path_id,
-                                        },
-                                        field: *field,
-                                        value: value.clone(),
-                                    });
-                            }
+                    if let Some(child_path_id) = store.paths().lookup(&child_path)
+                        && out.contains_key(&child_path_id)
+                    {
+                        let child_ns_depth =
+                            u16::try_from(store.paths().resolve(child_path_id).depth())
+                                .unwrap_or(u16::MAX);
+                        for (field, value) in child_fields {
                             out.get_mut(&child_path_id)
                                 .expect("path exists")
-                                .add_source(OpinionKey {
-                                    is_local: false,
-                                    arc_kind: ArcKind::Variants,
-                                    nested_arc_kind: None,
-                                    namespace_depth: child_ns_depth,
-                                    authored: true,
-                                    arc_list_index: 0,
-                                    layer_strength,
-                                    layer_id,
-                                    spec_path: child_path_id,
-                                });
-                        }
-                    }
-                }
-
-                // Forward variant-scoped child_authored_children as
-                // authored_children opinions on the child path.
-                for (child_tok, gc_list) in &variant_spec.child_authored_children {
-                    let child_path = path_obj.join(&[*child_tok]);
-                    if let Some(child_path_id) = store.paths().lookup(&child_path) {
-                        if out.contains_key(&child_path_id) {
-                            let child_ns_depth =
-                                u16::try_from(store.paths().resolve(child_path_id).depth())
-                                    .unwrap_or(u16::MAX);
-                            authored_children_out
-                                .entry(child_path_id)
-                                .or_default()
-                                .push((
-                                    OpinionKey {
+                                .add_opinion(Opinion {
+                                    key: OpinionKey {
                                         is_local: false,
                                         arc_kind: ArcKind::Variants,
                                         nested_arc_kind: None,
@@ -885,11 +838,55 @@ fn add_local_and_variant_opinions(
                                         arc_list_index: 0,
                                         layer_strength,
                                         layer_id,
-                                        spec_path: path,
+                                        spec_path: child_path_id,
                                     },
-                                    gc_list.clone(),
-                                ));
+                                    field: *field,
+                                    value: value.clone(),
+                                });
                         }
+                        out.get_mut(&child_path_id)
+                            .expect("path exists")
+                            .add_source(OpinionKey {
+                                is_local: false,
+                                arc_kind: ArcKind::Variants,
+                                nested_arc_kind: None,
+                                namespace_depth: child_ns_depth,
+                                authored: true,
+                                arc_list_index: 0,
+                                layer_strength,
+                                layer_id,
+                                spec_path: child_path_id,
+                            });
+                    }
+                }
+
+                // Forward variant-scoped child_authored_children as
+                // authored_children opinions on the child path.
+                for (child_tok, gc_list) in &variant_spec.child_authored_children {
+                    let child_path = path_obj.join(&[*child_tok]);
+                    if let Some(child_path_id) = store.paths().lookup(&child_path)
+                        && out.contains_key(&child_path_id)
+                    {
+                        let child_ns_depth =
+                            u16::try_from(store.paths().resolve(child_path_id).depth())
+                                .unwrap_or(u16::MAX);
+                        authored_children_out
+                            .entry(child_path_id)
+                            .or_default()
+                            .push((
+                                OpinionKey {
+                                    is_local: false,
+                                    arc_kind: ArcKind::Variants,
+                                    nested_arc_kind: None,
+                                    namespace_depth: child_ns_depth,
+                                    authored: true,
+                                    arc_list_index: 0,
+                                    layer_strength,
+                                    layer_id,
+                                    spec_path: path,
+                                },
+                                gc_list.clone(),
+                            ));
                     }
                 }
             }
@@ -1069,10 +1066,7 @@ fn add_inherit_edge_opinions(
                     continue;
                 };
                 if let Some(d) = deps.as_deref_mut() {
-                    d.add_layer_opinion(LayerDependency {
-                        layer: layer_id,
-                        prim: *dest_path_id,
-                    });
+                    d.add_layer_opinion(layer_id, *dest_path_id);
                 }
                 if let Some(order) = &spec.prim_order {
                     prim_order_out.entry(*dest_path_id).or_default().push((
@@ -1147,31 +1141,25 @@ fn add_inherit_edge_opinions(
                 // variant sets with child_fields targeting this child, those
                 // fields need to propagate through the inherit arc.
                 let remote_path = store.paths().resolve(*remote_path_id).clone();
-                if let Some(remote_leaf) = remote_path.leaf() {
-                    if let Some(remote_parent) = remote_path.parent() {
-                        if let Some(remote_parent_id) = store.paths().lookup(&remote_parent) {
-                            if let Some(parent_spec) = layer.prims.get(&remote_parent_id) {
-                                let parent_selections = resolve_variant_selections_for_prim(
-                                    store,
-                                    local_stack,
-                                    remote_parent_id,
-                                );
-                                for (set, selected) in &parent_selections {
-                                    if let Some(set_spec) = parent_spec.variant_sets.get(set)
-                                        && let Some(variant_spec) = set_spec.variants.get(selected)
-                                        && let Some(child_fields) =
-                                            variant_spec.child_fields.get(&remote_leaf)
-                                    {
-                                        for (field, value) in child_fields {
-                                            pending.push((
-                                                *dest_path_id,
-                                                *remote_path_id,
-                                                *field,
-                                                value.clone(),
-                                            ));
-                                        }
-                                    }
-                                }
+                if let Some(remote_leaf) = remote_path.leaf()
+                    && let Some(remote_parent) = remote_path.parent()
+                    && let Some(remote_parent_id) = store.paths().lookup(&remote_parent)
+                    && let Some(parent_spec) = layer.prims.get(&remote_parent_id)
+                {
+                    let parent_selections =
+                        resolve_variant_selections_for_prim(store, local_stack, remote_parent_id);
+                    for (set, selected) in &parent_selections {
+                        if let Some(set_spec) = parent_spec.variant_sets.get(set)
+                            && let Some(variant_spec) = set_spec.variants.get(selected)
+                            && let Some(child_fields) = variant_spec.child_fields.get(&remote_leaf)
+                        {
+                            for (field, value) in child_fields {
+                                pending.push((
+                                    *dest_path_id,
+                                    *remote_path_id,
+                                    *field,
+                                    value.clone(),
+                                ));
                             }
                         }
                     }
@@ -1589,16 +1577,16 @@ fn remap_path_id(
             let src_leaf_tok = src_root.leaf().unwrap();
             let p_leaf = store.tokens().resolve(p_leaf_tok);
             let src_leaf = store.tokens().resolve(src_leaf_tok);
-            if let Some(suffix) = p_leaf.strip_prefix(src_leaf) {
-                if suffix.starts_with('.') {
-                    // Remap: dest_root's leaf + property suffix.
-                    let dest_leaf = store.tokens().resolve(dest_root.leaf().unwrap());
-                    let new_leaf_str = alloc::format!("{}{}", dest_leaf, suffix);
-                    let new_leaf_tok = store.tokens_mut().intern(&new_leaf_str);
-                    // Build dest path = dest_root's parent + new_leaf_tok.
-                    let dest_parent = dest_root.parent().unwrap_or_else(crate::path::Path::root);
-                    return store.paths_mut().intern(dest_parent.join(&[new_leaf_tok]));
-                }
+            if let Some(suffix) = p_leaf.strip_prefix(src_leaf)
+                && suffix.starts_with('.')
+            {
+                // Remap: dest_root's leaf + property suffix.
+                let dest_leaf = store.tokens().resolve(dest_root.leaf().unwrap());
+                let new_leaf_str = alloc::format!("{}{}", dest_leaf, suffix);
+                let new_leaf_tok = store.tokens_mut().intern(&new_leaf_str);
+                // Build dest path = dest_root's parent + new_leaf_tok.
+                let dest_parent = dest_root.parent().unwrap_or_else(crate::path::Path::root);
+                return store.paths_mut().intern(dest_parent.join(&[new_leaf_tok]));
             }
         }
     }
@@ -1682,10 +1670,7 @@ fn add_reference_edge_opinions(
                 continue;
             };
             if let Some(d) = deps.as_deref_mut() {
-                d.add_layer_opinion(LayerDependency {
-                    layer: remote_layer_id,
-                    prim: *dest_path_id,
-                });
+                d.add_layer_opinion(remote_layer_id, *dest_path_id);
             }
             let base_key = OpinionKey {
                 is_local: false,
@@ -1698,10 +1683,10 @@ fn add_reference_edge_opinions(
                 layer_id: remote_layer_id,
                 spec_path: *remote_path_id,
             };
-            pending_sources.push((*dest_path_id, base_key.clone()));
+            pending_sources.push((*dest_path_id, base_key));
 
             for (field, value) in &remote_spec.fields {
-                pending_fields.push((*dest_path_id, *field, base_key.clone(), value.clone()));
+                pending_fields.push((*dest_path_id, *field, base_key, value.clone()));
             }
 
             // Forward variant opinions from selected variants.
@@ -1738,61 +1723,46 @@ fn add_reference_edge_opinions(
                         let ref_path_obj = store.paths().resolve(*dest_path_id).clone();
                         for (child_tok, gc_list) in &variant_spec.child_authored_children {
                             let child_path = ref_path_obj.join(&[*child_tok]);
-                            if let Some(child_path_id) = store.paths().lookup(&child_path) {
-                                if out.contains_key(&child_path_id) {
-                                    let child_ns =
-                                        u16::try_from(store.paths().resolve(child_path_id).depth())
-                                            .unwrap_or(u16::MAX);
-                                    authored_children_out
-                                        .entry(child_path_id)
-                                        .or_default()
-                                        .push((
-                                            OpinionKey {
-                                                is_local: false,
-                                                arc_kind: ArcKind::References,
-                                                nested_arc_kind: Some(ArcKind::Variants),
-                                                namespace_depth: child_ns,
-                                                authored: true,
-                                                arc_list_index,
-                                                layer_strength,
-                                                layer_id: remote_layer_id,
-                                                spec_path: *remote_path_id,
-                                            },
-                                            gc_list.clone(),
-                                        ));
-                                }
+                            if let Some(child_path_id) = store.paths().lookup(&child_path)
+                                && out.contains_key(&child_path_id)
+                            {
+                                let child_ns =
+                                    u16::try_from(store.paths().resolve(child_path_id).depth())
+                                        .unwrap_or(u16::MAX);
+                                authored_children_out
+                                    .entry(child_path_id)
+                                    .or_default()
+                                    .push((
+                                        OpinionKey {
+                                            is_local: false,
+                                            arc_kind: ArcKind::References,
+                                            nested_arc_kind: Some(ArcKind::Variants),
+                                            namespace_depth: child_ns,
+                                            authored: true,
+                                            arc_list_index,
+                                            layer_strength,
+                                            layer_id: remote_layer_id,
+                                            spec_path: *remote_path_id,
+                                        },
+                                        gc_list.clone(),
+                                    ));
                             }
                         }
 
                         // Forward child_fields to child paths.
                         for (child_tok, child_fields) in &variant_spec.child_fields {
                             let child_path = ref_path_obj.join(&[*child_tok]);
-                            if let Some(child_path_id) = store.paths().lookup(&child_path) {
-                                if out.contains_key(&child_path_id) {
-                                    let child_ns =
-                                        u16::try_from(store.paths().resolve(child_path_id).depth())
-                                            .unwrap_or(u16::MAX);
-                                    for (field, value) in child_fields {
-                                        pending_fields.push((
-                                            child_path_id,
-                                            *field,
-                                            OpinionKey {
-                                                is_local: false,
-                                                arc_kind: ArcKind::References,
-                                                nested_arc_kind: Some(ArcKind::Variants),
-                                                namespace_depth: child_ns,
-                                                authored: true,
-                                                arc_list_index,
-                                                layer_strength,
-                                                layer_id: remote_layer_id,
-                                                spec_path: child_path_id,
-                                            },
-                                            value.clone(),
-                                        ));
-                                    }
-                                    out.get_mut(&child_path_id)
-                                        .expect("path exists")
-                                        .add_source(OpinionKey {
+                            if let Some(child_path_id) = store.paths().lookup(&child_path)
+                                && out.contains_key(&child_path_id)
+                            {
+                                let child_ns =
+                                    u16::try_from(store.paths().resolve(child_path_id).depth())
+                                        .unwrap_or(u16::MAX);
+                                for (field, value) in child_fields {
+                                    pending_fields.push((
+                                        child_path_id,
+                                        *field,
+                                        OpinionKey {
                                             is_local: false,
                                             arc_kind: ArcKind::References,
                                             nested_arc_kind: Some(ArcKind::Variants),
@@ -1802,8 +1772,23 @@ fn add_reference_edge_opinions(
                                             layer_strength,
                                             layer_id: remote_layer_id,
                                             spec_path: child_path_id,
-                                        });
+                                        },
+                                        value.clone(),
+                                    ));
                                 }
+                                out.get_mut(&child_path_id)
+                                    .expect("path exists")
+                                    .add_source(OpinionKey {
+                                        is_local: false,
+                                        arc_kind: ArcKind::References,
+                                        nested_arc_kind: Some(ArcKind::Variants),
+                                        namespace_depth: child_ns,
+                                        authored: true,
+                                        arc_list_index,
+                                        layer_strength,
+                                        layer_id: remote_layer_id,
+                                        spec_path: child_path_id,
+                                    });
                             }
                         }
                     }
@@ -2176,10 +2161,7 @@ fn add_payload_edge_opinions(
                 continue;
             };
             if let Some(d) = deps.as_deref_mut() {
-                d.add_layer_opinion(LayerDependency {
-                    layer: remote_layer_id,
-                    prim: *dest_path_id,
-                });
+                d.add_layer_opinion(remote_layer_id, *dest_path_id);
             }
             pending_sources.push((
                 *dest_path_id,
@@ -2514,10 +2496,7 @@ fn add_specializes_edge_opinions(
                     continue;
                 };
                 if let Some(d) = deps.as_deref_mut() {
-                    d.add_layer_opinion(LayerDependency {
-                        layer: layer_id,
-                        prim: *dest_path_id,
-                    });
+                    d.add_layer_opinion(layer_id, *dest_path_id);
                 }
                 if let Some(order) = &spec.prim_order {
                     prim_order_out.entry(*dest_path_id).or_default().push((

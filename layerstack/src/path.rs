@@ -33,6 +33,13 @@ impl PathId {
     }
 }
 
+impl invalidation::DenseKey for PathId {
+    #[inline]
+    fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// A segmented absolute path.
 ///
 /// v0.1 supports prim-style absolute paths like `/A/B/C`.

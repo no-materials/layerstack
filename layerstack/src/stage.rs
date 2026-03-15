@@ -95,6 +95,24 @@ impl Stage {
         }
     }
 
+    /// Merges prims and children from a partial (scoped) composition into this stage.
+    ///
+    /// Entries in `partial` overwrite entries in `self` for the same key.
+    /// The dependency map is not merged — the caller is responsible for rebuilding it.
+    pub(crate) fn merge_from(&mut self, partial: Self) {
+        for (path, index) in partial.prims {
+            self.prims.insert(path, index);
+        }
+        for (parent, kids) in partial.children {
+            self.children.insert(parent, kids);
+        }
+    }
+
+    /// Returns all prim paths present in the stage.
+    pub(crate) fn prim_paths(&self) -> impl Iterator<Item = PathId> + '_ {
+        self.prims.keys().copied()
+    }
+
     /// Returns the dependency map if composition was run with
     /// [`StageOptions::with_dependencies`] enabled.
     #[must_use]
@@ -206,7 +224,7 @@ impl Stage {
 
     /// Resolves a time-varying field on a prim at a specific time.
     ///
-    /// TimeSamples take priority over default values per §12.3. The strongest
+    /// `TimeSamples` take priority over default values per §12.3. The strongest
     /// opinion with timeSamples is used. If no timeSamples exist, falls back to
     /// `resolve_value`.
     ///

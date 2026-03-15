@@ -19,6 +19,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "invalidation"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "802752dcc4e541091165438496b1efb4086dddf3ae787950f3451e16d6649f97"
+dependencies = [
+ "hashbrown",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -29,6 +38,7 @@ name = "layerstack"
 version = "0.1.0"
 dependencies = [
  "hashbrown",
+ "invalidation",
 ]
 
 [[package]]

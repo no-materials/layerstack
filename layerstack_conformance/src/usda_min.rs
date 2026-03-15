@@ -128,7 +128,7 @@ struct PrimDef {
     path: String,
     specifier: layerstack::doc::Specifier,
     attrs: Vec<String>,
-    /// TimeSamples: (attr_name, sorted samples).
+    /// `TimeSamples`: (`attr_name`, sorted samples).
     time_samples: Vec<(String, Vec<(f64, String)>)>,
     references: ReferencesDef,
     inherits: InheritsDef,
@@ -136,25 +136,25 @@ struct PrimDef {
     payloads: PayloadsDef,
     targets: TargetsDef,
     declares_targets: bool,
-    /// Named relationships: (rel_name, op, target_paths).
+    /// Named relationships: (`rel_name`, op, `target_paths`).
     named_rels: Vec<(String, TargetOp, Vec<String>)>,
-    /// Attribute connections: (attr_name, op, target_paths).
+    /// Attribute connections: (`attr_name`, op, `target_paths`).
     connections: Vec<(String, TargetOp, Vec<String>)>,
     prim_order: Option<Vec<String>>,
     variant_selections: Vec<(String, String)>,
     variant_set_names: Vec<String>,
-    /// If this prim is inside a variant branch: (parent_path, set_name, branch_name).
-    /// The full_variant_context contains ALL ancestor variant branches, from outermost to
+    /// If this prim is inside a variant branch: (`parent_path`, `set_name`, `branch_name`).
+    /// The `full_variant_context` contains ALL ancestor variant branches, from outermost to
     /// innermost. This is needed for nested variant sets to correctly filter children
     /// that require multiple ancestor variant selections to be active.
     variant_parent: Option<(String, String, String)>,
-    /// Full variant context chain: (owning_prim_path, set_name, branch_name).
+    /// Full variant context chain: (`set_name`, `branch_name`, `child_name`).
     full_variant_context: Vec<(String, String, String)>,
-    /// Fields defined inside variant branches of this prim: (set_name, branch_name, attr_name).
+    /// Fields defined inside variant branches of this prim: (`set_name`, `branch_name`, `attr_name`).
     variant_fields: Vec<(String, String, String)>,
     /// Composition arcs on child prims inside variant branches of this prim.
-    /// (set_name, branch_name, child_name, references, inherits, specializes, payloads).
-    variant_child_arcs: Vec<VariantChildArc>,
+    /// (`set_name`, `branch_name`, `child_name`, references, inherits, specializes, payloads).
+    _variant_child_arcs: Vec<VariantChildArc>,
     /// Composition arcs on variant branch headers (e.g. `"full" (add references = ...) {}`).
     /// These apply to the prim itself when the variant is selected.
     variant_branch_arcs: Vec<VariantBranchArc>,
@@ -280,7 +280,7 @@ enum BraceKind {
     /// metadata. Tracked for brace balance and `full_variant_context` but NOT
     /// returned by `current_variant_context`, preserving existing behaviour for
     /// prims inside these branches (e.g. `over` prims should not get a
-    /// variant_parent change).
+    /// `variant_parent` change).
     VariantBranchMeta(String, String), // (set_name, branch_name)
     /// Any other brace scope (e.g., `variants = { ... }`).
     Other,
@@ -624,7 +624,7 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
             && pending.is_none()
             && brace_stack
                 .last()
-                .map_or(false, |k| matches!(k, BraceKind::VariantSet(_)))
+                .is_some_and(|k| matches!(k, BraceKind::VariantSet(_)))
         {
             parse_variant_branch_name(line)
         } else {
@@ -794,7 +794,7 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                             variant_parent,
                             full_variant_context: fvc,
                             variant_fields: Vec::new(),
-                            variant_child_arcs: Vec::new(),
+                            _variant_child_arcs: Vec::new(),
                             variant_branch_arcs: Vec::new(),
                         });
                     } else if let Some(ref set_name) = variant_set_name {
@@ -1646,6 +1646,7 @@ fn load_layer_with_prims(
     }
     // Required outer variant selections for nested variant children.
     // Key: (parent_path, set, branch, child_leaf) → Vec<(outer_set, outer_branch)>
+    #[expect(clippy::type_complexity, reason = "one-off helper variable")]
     let mut nested_variant_requirements: std::collections::HashMap<
         (String, String, String, String),
         Vec<(String, String)>,
@@ -1661,7 +1662,7 @@ fn load_layer_with_prims(
             // itself lives inside an outer variant branch).
             let is_grandchild = variant_sets_by_path
                 .get(parent_path)
-                .map_or(false, |parent_sets| parent_sets.contains(set));
+                .is_some_and(|parent_sets| parent_sets.contains(set));
             if is_grandchild {
                 // parent_path is itself a variant-scoped prim with the same
                 // variant context → this is a grandchild.
@@ -1732,7 +1733,7 @@ fn load_layer_with_prims(
     // fields AND a non-variant definition exists at the same path, the fields
     // are stored on the parent's VariantSpec.child_fields.
     // Key: (parent_path, set_name, branch_name) → Vec<(child_name, attrs, time_samples)>
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity, reason = "one-off helper variable")]
     let mut variant_child_fields_by_parent: std::collections::HashMap<
         (String, String, String),
         Vec<(String, Vec<String>, Vec<(String, Vec<(f64, String)>)>)>,
@@ -1802,9 +1803,7 @@ fn load_layer_with_prims(
     }
 
     // Process all PrimDefs: non-variant first, then variant-only.
-    let all_defs = non_variant_defs
-        .into_iter()
-        .chain(variant_only_defs.into_iter());
+    let all_defs = non_variant_defs.into_iter().chain(variant_only_defs);
     for (prim_path, prim) in all_defs {
         let mut spec = PrimSpec {
             specifier: Some(prim.specifier),
@@ -1964,7 +1963,7 @@ fn load_layer_with_prims(
                 }
             }
         }
-        for ((parent, set, _branch), _) in &variant_child_fields_by_parent {
+        for (parent, set, _branch) in variant_child_fields_by_parent.keys() {
             if *parent == prim.path && !all_set_names.contains(set) {
                 all_set_names.push(set.clone());
             }

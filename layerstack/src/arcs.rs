@@ -118,24 +118,23 @@ pub(crate) fn resolve_references_for_prim(
     // Also check parent's variant specs for child references.
     let leaf = store.paths().resolve(prim).leaf();
     let parent = store.paths().resolve(prim).parent();
-    if let (Some(leaf), Some(parent)) = (leaf, parent) {
-        if let Some(parent_id) = store.paths().lookup(&parent) {
-            let parent_selections =
-                resolve_variant_selections_for_prim(store, local_stack, parent_id);
-            for layer_id in &local_stack.layers {
-                let Some(layer) = store.layer(*layer_id) else {
-                    continue;
-                };
-                let Some(parent_spec) = layer.prims.get(&parent_id) else {
-                    continue;
-                };
-                for (set_tok, selected_variant) in &parent_selections {
-                    if let Some(set_spec) = parent_spec.variant_sets.get(set_tok)
-                        && let Some(variant_spec) = set_spec.variants.get(selected_variant)
-                        && let Some(child_refs) = variant_spec.child_references.get(&leaf)
-                    {
-                        ops.push(child_refs.clone());
-                    }
+    if let (Some(leaf), Some(parent)) = (leaf, parent)
+        && let Some(parent_id) = store.paths().lookup(&parent)
+    {
+        let parent_selections = resolve_variant_selections_for_prim(store, local_stack, parent_id);
+        for layer_id in &local_stack.layers {
+            let Some(layer) = store.layer(*layer_id) else {
+                continue;
+            };
+            let Some(parent_spec) = layer.prims.get(&parent_id) else {
+                continue;
+            };
+            for (set_tok, selected_variant) in &parent_selections {
+                if let Some(set_spec) = parent_spec.variant_sets.get(set_tok)
+                    && let Some(variant_spec) = set_spec.variants.get(selected_variant)
+                    && let Some(child_refs) = variant_spec.child_references.get(&leaf)
+                {
+                    ops.push(child_refs.clone());
                 }
             }
         }
@@ -146,7 +145,7 @@ pub(crate) fn resolve_references_for_prim(
 
 /// Resolves variant-scoped child references using a separate stack for variant
 /// selection resolution. This is needed when composing within a reference arc:
-/// the PrimSpec data lives in the remote stack, but variant selections should
+/// the `PrimSpec` data lives in the remote stack, but variant selections should
 /// come from the combined stack (which includes the referencing layer's
 /// stronger selections).
 ///
@@ -246,7 +245,7 @@ pub(crate) fn resolve_variant_child_references(
 
 /// Resolves variant branch-level references using a separate stack for variant
 /// selection resolution. This is needed when composing within a reference arc:
-/// the PrimSpec data lives in the remote stack, but variant selections should
+/// the `PrimSpec` data lives in the remote stack, but variant selections should
 /// come from the combined stack (including inherit-resolved selections).
 pub(crate) fn resolve_variant_branch_references(
     store: &dyn LayerStore,
