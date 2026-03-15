@@ -55,10 +55,10 @@ fn main() {
     };
     hero_spec
         .fields
-        .insert(field_hp, FieldValue::Value(Value::Int(100)));
+        .insert(field_hp, FieldValue::Value(Value::Int64(100)));
     hero_spec
         .fields
-        .insert(field_speed, FieldValue::Value(Value::Float(5.0)));
+        .insert(field_speed, FieldValue::Value(Value::Double(5.0)));
     // Hero references the power gem for bonus stats.
     hero_spec.references.append.push(Reference {
         layer: LayerId(2),
@@ -93,7 +93,7 @@ fn main() {
     };
     enemy_spec
         .fields
-        .insert(field_hp, FieldValue::Value(Value::Int(50)));
+        .insert(field_hp, FieldValue::Value(Value::Int64(50)));
     base.prims.insert(enemy, enemy_spec);
     store.insert_layer(base);
 
@@ -109,7 +109,7 @@ fn main() {
     };
     gem_spec
         .fields
-        .insert(field_speed, FieldValue::Value(Value::Float(10.0)));
+        .insert(field_speed, FieldValue::Value(Value::Double(10.0)));
     items.prims.insert(power_gem, gem_spec);
     store.insert_layer(items);
 
@@ -140,7 +140,7 @@ fn main() {
         let layer = store.layers.get_mut(&LayerId(1)).unwrap();
         let spec = layer.prims.get_mut(&hero).unwrap();
         spec.fields
-            .insert(field_hp, FieldValue::Value(Value::Int(70)));
+            .insert(field_hp, FieldValue::Value(Value::Int64(70)));
     }
 
     live.notify_layer_edit(LayerId(1));
@@ -193,7 +193,7 @@ fn main() {
         let layer = store.layers.get_mut(&LayerId(2)).unwrap();
         let spec = layer.prims.get_mut(&power_gem).unwrap();
         spec.fields
-            .insert(field_speed, FieldValue::Value(Value::Float(20.0)));
+            .insert(field_speed, FieldValue::Value(Value::Double(20.0)));
     }
 
     live.notify_layer_edit(LayerId(2));
@@ -225,7 +225,7 @@ fn main() {
         let e_spec = layer.prims.get_mut(&enemy).unwrap();
         e_spec
             .fields
-            .insert(field_hp, FieldValue::Value(Value::Int(25)));
+            .insert(field_hp, FieldValue::Value(Value::Int64(25)));
         let s_spec = layer.prims.get_mut(&shield).unwrap();
         s_spec.fields.insert(
             field_color,
@@ -264,7 +264,7 @@ fn main() {
         };
         t_spec.fields.insert(
             store.tokens.intern("value"),
-            FieldValue::Value(Value::Int(500)),
+            FieldValue::Value(Value::Int64(500)),
         );
         layer.prims.insert(treasure, t_spec);
     }

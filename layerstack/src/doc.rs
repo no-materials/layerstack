@@ -34,22 +34,52 @@ pub enum Specifier {
 
 /// A plain value that can be resolved by the kernel.
 ///
-/// Domain-specific types should typically be encoded as `Opaque` values in a
-/// higher-level profile crate.
+/// Covers all scalar types from AOUSD Core §6.2. Domain-specific compound
+/// types (vectors, matrices, quaternions) should typically be encoded as
+/// `Opaque` values in a higher-level profile crate.
+///
+/// Spec: AOUSD Core §6.2 (scene description data types), §16.3.10 (value
+/// type encoding).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     /// No value.
     Null,
-    /// A boolean.
+    /// A boolean (`bool`). Spec: §6.2.
     Bool(bool),
-    /// An integer.
-    Int(i64),
-    /// A float.
-    Float(f64),
-    /// A UTF-8 string.
+    /// An unsigned 8-bit integer (`uchar`). Spec: §6.2.
+    UChar(u8),
+    /// A signed 32-bit integer (`int`). Spec: §6.2.
+    Int(i32),
+    /// An unsigned 32-bit integer (`uint`). Spec: §6.2.
+    UInt(u32),
+    /// A signed 64-bit integer (`int64`). Spec: §6.2.
+    Int64(i64),
+    /// An unsigned 64-bit integer (`uint64`). Spec: §6.2.
+    UInt64(u64),
+    /// An IEEE 754 half-precision float (`half`), stored as raw bits.
+    ///
+    /// Spec: §6.2, §16.3.10.8 (IEEE 754-2008).
+    Half(u16),
+    /// A 32-bit float (`float`). Spec: §6.2.
+    Float(f32),
+    /// A 64-bit float (`double`). Spec: §6.2.
+    Double(f64),
+    /// A UTF-8 string (`string`). Spec: §6.2.
     String(Arc<str>),
-    /// A token (interned string).
+    /// A token (interned string, `token`). Spec: §6.2.
     Token(TokenId),
+    /// An asset path, distinct from a plain string.
+    ///
+    /// Asset paths undergo variable substitution and resolution (§9).
+    /// They are used for layer references, texture paths, and other
+    /// external resource identifiers.
+    ///
+    /// Spec: §6.2 (asset type), §9 (asset resolution).
+    Asset(Arc<str>),
+    /// A time code value (`timecode`), semantically a time in frames.
+    ///
+    /// Spec: §6.2.
+    TimeCode(f64),
     /// Opaque bytes tagged with a type name.
     Opaque {
         /// The (interned) type name for these bytes.

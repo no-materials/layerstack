@@ -1823,9 +1823,9 @@ fn load_layer_with_prims(
                 .map(|(t, v)| {
                     // Try parsing as int, then float, then string.
                     let value = if let Ok(i) = v.parse::<i64>() {
-                        Value::Int(i)
+                        Value::Int64(i)
                     } else if let Ok(f) = v.parse::<f64>() {
-                        Value::Float(f)
+                        Value::Double(f)
                     } else {
                         Value::String(v.into())
                     };
@@ -2137,9 +2137,9 @@ fn load_layer_with_prims(
                                 .iter()
                                 .map(|(t, v)| {
                                     let value = if let Ok(i) = v.parse::<i64>() {
-                                        Value::Int(i)
+                                        Value::Int64(i)
                                     } else if let Ok(f) = v.parse::<f64>() {
-                                        Value::Float(f)
+                                        Value::Double(f)
                                     } else {
                                         Value::String(v.clone().into())
                                     };

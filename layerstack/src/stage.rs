@@ -540,20 +540,34 @@ fn lerp_values(a: &Value, b: &Value, t_a: f64, t_b: f64, t: f64) -> Option<Value
     };
 
     match (a, b) {
-        (Value::Float(va), Value::Float(vb)) => Some(Value::Float(va + (vb - va) * alpha)),
+        (Value::Double(va), Value::Double(vb)) => Some(Value::Double(va + (vb - va) * alpha)),
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "f64→f32 intentional for single-precision lerp"
+        )]
+        (Value::Float(va), Value::Float(vb)) => {
+            let alpha_f = alpha as f32;
+            Some(Value::Float(va + (vb - va) * alpha_f))
+        }
+        (Value::TimeCode(va), Value::TimeCode(vb)) => Some(Value::TimeCode(va + (vb - va) * alpha)),
+        (Value::Int64(va), Value::Int64(vb)) => {
+            let result = *va as f64 + (*vb as f64 - *va as f64) * alpha;
+            #[allow(clippy::cast_possible_truncation, reason = "clamped by f64 range")]
+            let i = lerp_round(result) as i64;
+            Some(Value::Int64(i))
+        }
         (Value::Int(va), Value::Int(vb)) => {
             let result = *va as f64 + (*vb as f64 - *va as f64) * alpha;
-            // Round to nearest (no_std-compatible), clamped to i64 range.
-            let rounded = if result >= 0.0 {
-                result + 0.5
-            } else {
-                result - 0.5
-            };
             #[allow(clippy::cast_possible_truncation, reason = "clamped by f64 range")]
-            let i = rounded as i64;
+            let i = lerp_round(result) as i32;
             Some(Value::Int(i))
         }
         // Non-interpolable types fall back to held (earlier sample).
         _ => Some(a.clone()),
     }
+}
+
+/// Round-to-nearest for lerp results (no_std-compatible).
+fn lerp_round(v: f64) -> f64 {
+    if v >= 0.0 { v + 0.5 } else { v - 0.5 }
 }

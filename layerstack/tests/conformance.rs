@@ -27,7 +27,7 @@ fn sublayer_strength_local_beats_sublayer() {
     let mut root_spec = PrimSpec::default();
     root_spec
         .fields
-        .insert(field_x, FieldValue::Value(Value::Int(1)));
+        .insert(field_x, FieldValue::Value(Value::Int64(1)));
     root_layer.prims.insert(p, root_spec);
     store.insert_layer(root_layer);
 
@@ -39,7 +39,7 @@ fn sublayer_strength_local_beats_sublayer() {
     let mut sub_spec = PrimSpec::default();
     sub_spec
         .fields
-        .insert(field_x, FieldValue::Value(Value::Int(2)));
+        .insert(field_x, FieldValue::Value(Value::Int64(2)));
     sub_layer.prims.insert(p, sub_spec);
     store.insert_layer(sub_layer);
 
@@ -53,7 +53,7 @@ fn sublayer_strength_local_beats_sublayer() {
     );
 
     let resolved = stage.resolve_field(p, field_x).expect("field exists");
-    assert_eq!(resolved.value, Value::Int(1));
+    assert_eq!(resolved.value, Value::Int64(1));
     let prov = resolved.provenance.expect("provenance enabled");
     assert_eq!(prov.layer, LayerId(1));
 }
@@ -81,7 +81,7 @@ fn reference_opinions_are_weaker_than_local() {
     });
     root_spec
         .fields
-        .insert(field_x, FieldValue::Value(Value::Int(2)));
+        .insert(field_x, FieldValue::Value(Value::Int64(2)));
     root_layer.prims.insert(p, root_spec);
     store.insert_layer(root_layer);
 
@@ -93,7 +93,7 @@ fn reference_opinions_are_weaker_than_local() {
     let mut ref_spec = PrimSpec::default();
     ref_spec
         .fields
-        .insert(field_x, FieldValue::Value(Value::Int(1)));
+        .insert(field_x, FieldValue::Value(Value::Int64(1)));
     ref_layer.prims.insert(q, ref_spec);
     ref_layer.prims.insert(q_child, PrimSpec::default());
     store.insert_layer(ref_layer);
@@ -105,7 +105,7 @@ fn reference_opinions_are_weaker_than_local() {
         "reference populates descendant prims"
     );
     let resolved = stage.resolve_field(p, field_x).expect("field exists");
-    assert_eq!(resolved.value, Value::Int(2));
+    assert_eq!(resolved.value, Value::Int64(2));
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn variants_selection_is_strength_ordered() {
 
     let mut set_spec = VariantSetSpec::default();
     let mut fields_a = HashMap::new();
-    fields_a.insert(field_x, FieldValue::Value(Value::Int(1)));
+    fields_a.insert(field_x, FieldValue::Value(Value::Int64(1)));
     set_spec.variants.insert(
         variant_a,
         VariantSpec {
@@ -149,7 +149,7 @@ fn variants_selection_is_strength_ordered() {
     );
 
     let mut fields_b = HashMap::new();
-    fields_b.insert(field_x, FieldValue::Value(Value::Int(2)));
+    fields_b.insert(field_x, FieldValue::Value(Value::Int64(2)));
     set_spec.variants.insert(
         variant_b,
         VariantSpec {
@@ -164,7 +164,7 @@ fn variants_selection_is_strength_ordered() {
 
     let stage = Stage::compose(&mut store, LayerId(1), StageOptions::default());
     let resolved = stage.resolve_field(prim, field_x).expect("field exists");
-    assert_eq!(resolved.value, Value::Int(1));
+    assert_eq!(resolved.value, Value::Int64(1));
 }
 
 #[test]
@@ -231,7 +231,7 @@ fn resolve_value_distinguishes_scalar_and_list() {
     };
     let mut spec = PrimSpec::default();
     spec.fields
-        .insert(field_x, FieldValue::Value(Value::Int(123)));
+        .insert(field_x, FieldValue::Value(Value::Int64(123)));
     spec.fields.insert(
         field_classes,
         FieldValue::TokenListOp(ListOp {
@@ -252,7 +252,7 @@ fn resolve_value_distinguishes_scalar_and_list() {
     );
 
     let resolved_x = stage.resolve_value(prim, field_x).expect("field exists");
-    assert_eq!(resolved_x.value, ResolvedValue::Scalar(Value::Int(123)));
+    assert_eq!(resolved_x.value, ResolvedValue::Scalar(Value::Int64(123)));
     assert_eq!(resolved_x.provenance.unwrap().layer, LayerId(1));
 
     let resolved_classes = stage
@@ -266,7 +266,7 @@ fn resolve_value_distinguishes_scalar_and_list() {
 
     assert_eq!(
         stage.resolve_field(prim, field_x).expect("scalar").value,
-        Value::Int(123)
+        Value::Int64(123)
     );
     assert!(stage.resolve_field(prim, field_classes).is_none());
 }
@@ -365,7 +365,7 @@ fn explain_field_returns_sorted_opinion_stack() {
     let mut root_spec = PrimSpec::default();
     root_spec
         .fields
-        .insert(field_x, FieldValue::Value(Value::Int(1)));
+        .insert(field_x, FieldValue::Value(Value::Int64(1)));
     root_layer.prims.insert(prim, root_spec);
     store.insert_layer(root_layer);
 
@@ -377,7 +377,7 @@ fn explain_field_returns_sorted_opinion_stack() {
     let mut sub_spec = PrimSpec::default();
     sub_spec
         .fields
-        .insert(field_x, FieldValue::Value(Value::Int(2)));
+        .insert(field_x, FieldValue::Value(Value::Int64(2)));
     sub_layer.prims.insert(prim, sub_spec);
     store.insert_layer(sub_layer);
 
@@ -391,7 +391,7 @@ fn explain_field_returns_sorted_opinion_stack() {
 
     assert_eq!(
         stage.resolve_field(prim, field_x).expect("scalar").value,
-        Value::Int(1)
+        Value::Int64(1)
     );
 }
 
@@ -683,7 +683,7 @@ fn value_blocked_suppresses_weaker_opinions() {
     let mut sub_spec = PrimSpec::default();
     sub_spec
         .fields
-        .insert(field_x, FieldValue::Value(Value::Int(42)));
+        .insert(field_x, FieldValue::Value(Value::Int64(42)));
     sub_layer.prims.insert(prim, sub_spec);
     store.insert_layer(sub_layer);
 
@@ -712,7 +712,7 @@ fn value_blocked_only_affects_blocked_field() {
     spec.fields
         .insert(field_x, FieldValue::Value(Value::Blocked));
     spec.fields
-        .insert(field_y, FieldValue::Value(Value::Int(99)));
+        .insert(field_y, FieldValue::Value(Value::Int64(99)));
     layer.prims.insert(prim, spec);
     store.insert_layer(layer);
 
@@ -721,7 +721,7 @@ fn value_blocked_only_affects_blocked_field() {
     assert!(stage.resolve_field(prim, field_x).is_none());
     assert_eq!(
         stage.resolve_field(prim, field_y).expect("y exists").value,
-        Value::Int(99)
+        Value::Int64(99)
     );
 }
 
@@ -742,9 +742,9 @@ fn time_samples_held_interpolation() {
     spec.fields.insert(
         field,
         FieldValue::TimeSamples(vec![
-            (1.0, Value::Float(10.0)),
-            (3.0, Value::Float(30.0)),
-            (5.0, Value::Float(50.0)),
+            (1.0, Value::Double(10.0)),
+            (3.0, Value::Double(30.0)),
+            (5.0, Value::Double(50.0)),
         ]),
     );
     layer.prims.insert(p, spec);
@@ -758,14 +758,14 @@ fn time_samples_held_interpolation() {
             .resolve_value_at_time(p, field, 1.0, InterpolationType::Held)
             .unwrap()
             .value,
-        Value::Float(10.0)
+        Value::Double(10.0)
     );
     assert_eq!(
         stage
             .resolve_value_at_time(p, field, 3.0, InterpolationType::Held)
             .unwrap()
             .value,
-        Value::Float(30.0)
+        Value::Double(30.0)
     );
 
     // Between samples: held returns earlier value.
@@ -774,14 +774,14 @@ fn time_samples_held_interpolation() {
             .resolve_value_at_time(p, field, 2.0, InterpolationType::Held)
             .unwrap()
             .value,
-        Value::Float(10.0)
+        Value::Double(10.0)
     );
     assert_eq!(
         stage
             .resolve_value_at_time(p, field, 4.0, InterpolationType::Held)
             .unwrap()
             .value,
-        Value::Float(30.0)
+        Value::Double(30.0)
     );
 
     // Before first sample: return first value.
@@ -790,7 +790,7 @@ fn time_samples_held_interpolation() {
             .resolve_value_at_time(p, field, 0.0, InterpolationType::Held)
             .unwrap()
             .value,
-        Value::Float(10.0)
+        Value::Double(10.0)
     );
 
     // After last sample: return last value.
@@ -799,7 +799,7 @@ fn time_samples_held_interpolation() {
             .resolve_value_at_time(p, field, 100.0, InterpolationType::Held)
             .unwrap()
             .value,
-        Value::Float(50.0)
+        Value::Double(50.0)
     );
 }
 
@@ -819,7 +819,10 @@ fn time_samples_linear_interpolation() {
     let mut spec = PrimSpec::default();
     spec.fields.insert(
         field,
-        FieldValue::TimeSamples(vec![(0.0, Value::Float(0.0)), (10.0, Value::Float(100.0))]),
+        FieldValue::TimeSamples(vec![
+            (0.0, Value::Double(0.0)),
+            (10.0, Value::Double(100.0)),
+        ]),
     );
     layer.prims.insert(p, spec);
     store.insert_layer(layer);
@@ -832,7 +835,7 @@ fn time_samples_linear_interpolation() {
             .resolve_value_at_time(p, field, 5.0, InterpolationType::Linear)
             .unwrap()
             .value,
-        Value::Float(50.0)
+        Value::Double(50.0)
     );
 
     // Quarter point.
@@ -841,7 +844,7 @@ fn time_samples_linear_interpolation() {
             .resolve_value_at_time(p, field, 2.5, InterpolationType::Linear)
             .unwrap()
             .value,
-        Value::Float(25.0)
+        Value::Double(25.0)
     );
 
     // Exact sample.
@@ -850,7 +853,7 @@ fn time_samples_linear_interpolation() {
             .resolve_value_at_time(p, field, 0.0, InterpolationType::Linear)
             .unwrap()
             .value,
-        Value::Float(0.0)
+        Value::Double(0.0)
     );
 
     // Beyond range: clamp.
@@ -859,14 +862,14 @@ fn time_samples_linear_interpolation() {
             .resolve_value_at_time(p, field, -1.0, InterpolationType::Linear)
             .unwrap()
             .value,
-        Value::Float(0.0)
+        Value::Double(0.0)
     );
     assert_eq!(
         stage
             .resolve_value_at_time(p, field, 20.0, InterpolationType::Linear)
             .unwrap()
             .value,
-        Value::Float(100.0)
+        Value::Double(100.0)
     );
 }
 
@@ -886,7 +889,7 @@ fn time_samples_linear_int_interpolation() {
     let mut spec = PrimSpec::default();
     spec.fields.insert(
         field,
-        FieldValue::TimeSamples(vec![(0.0, Value::Int(0)), (10.0, Value::Int(100))]),
+        FieldValue::TimeSamples(vec![(0.0, Value::Int64(0)), (10.0, Value::Int64(100))]),
     );
     layer.prims.insert(p, spec);
     store.insert_layer(layer);
@@ -899,7 +902,7 @@ fn time_samples_linear_int_interpolation() {
             .resolve_value_at_time(p, field, 5.0, InterpolationType::Linear)
             .unwrap()
             .value,
-        Value::Int(50)
+        Value::Int64(50)
     );
 }
 
@@ -956,7 +959,7 @@ fn time_samples_override_default_value() {
     let mut root_spec = PrimSpec::default();
     root_spec.fields.insert(
         field,
-        FieldValue::TimeSamples(vec![(1.0, Value::Float(10.0))]),
+        FieldValue::TimeSamples(vec![(1.0, Value::Double(10.0))]),
     );
     root.prims.insert(p, root_spec);
     store.insert_layer(root);
@@ -970,7 +973,7 @@ fn time_samples_override_default_value() {
     let mut sub_spec = PrimSpec::default();
     sub_spec
         .fields
-        .insert(field, FieldValue::Value(Value::Float(999.0)));
+        .insert(field, FieldValue::Value(Value::Double(999.0)));
     sub.prims.insert(p, sub_spec);
     store.insert_layer(sub);
 
@@ -982,7 +985,7 @@ fn time_samples_override_default_value() {
             .resolve_value_at_time(p, field, 1.0, InterpolationType::Held)
             .unwrap()
             .value,
-        Value::Float(10.0)
+        Value::Double(10.0)
     );
 
     // Default resolve (no time) returns the stronger timeSamples, which yields None
@@ -1027,7 +1030,7 @@ fn dependency_map_records_local_layer_opinions() {
     };
     let mut spec = PrimSpec::default();
     spec.fields
-        .insert(field_x, FieldValue::Value(Value::Int(1)));
+        .insert(field_x, FieldValue::Value(Value::Int64(1)));
     root.prims.insert(p, spec);
     store.insert_layer(root);
 
@@ -1039,7 +1042,7 @@ fn dependency_map_records_local_layer_opinions() {
     let mut sub_spec = PrimSpec::default();
     sub_spec
         .fields
-        .insert(field_x, FieldValue::Value(Value::Int(2)));
+        .insert(field_x, FieldValue::Value(Value::Int64(2)));
     sub.prims.insert(p, sub_spec);
     store.insert_layer(sub);
 
@@ -1096,7 +1099,7 @@ fn dependency_map_records_reference_arc_and_layer() {
     let mut q_spec = PrimSpec::default();
     q_spec
         .fields
-        .insert(field_x, FieldValue::Value(Value::Int(42)));
+        .insert(field_x, FieldValue::Value(Value::Int64(42)));
     ref_layer.prims.insert(q, q_spec);
     store.insert_layer(ref_layer);
 
@@ -1144,7 +1147,7 @@ fn dependency_map_records_inherit_arc() {
     let mut base_spec = PrimSpec::default();
     base_spec
         .fields
-        .insert(field_x, FieldValue::Value(Value::Int(10)));
+        .insert(field_x, FieldValue::Value(Value::Int64(10)));
     layer.prims.insert(base, base_spec);
     store.insert_layer(layer);
 
@@ -1186,7 +1189,7 @@ fn dependency_map_records_specializes_arc() {
     let mut base_spec = PrimSpec::default();
     base_spec
         .fields
-        .insert(field_x, FieldValue::Value(Value::Int(10)));
+        .insert(field_x, FieldValue::Value(Value::Int64(10)));
     layer.prims.insert(base, base_spec);
     store.insert_layer(layer);
 

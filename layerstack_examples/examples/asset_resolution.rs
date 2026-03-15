@@ -173,7 +173,7 @@ fn main() {
         );
         arm_spec
             .fields
-            .insert(field_joints, FieldValue::Value(Value::Int(6)));
+            .insert(field_joints, FieldValue::Value(Value::Int64(6)));
 
         let mut prims = HashMap::new();
         prims.insert(arm_path, arm_spec);

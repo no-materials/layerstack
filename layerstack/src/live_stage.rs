@@ -271,7 +271,7 @@ mod tests {
         };
         let mut spec = PrimSpec::default();
         spec.fields
-            .insert(field_x, FieldValue::Value(Value::Int(42)));
+            .insert(field_x, FieldValue::Value(Value::Int64(42)));
         layer.prims.insert(prim, spec);
         store.insert_layer(layer);
 
@@ -315,14 +315,14 @@ mod tests {
         };
         let mut spec = PrimSpec::default();
         spec.fields
-            .insert(field_x, FieldValue::Value(Value::Int(1)));
+            .insert(field_x, FieldValue::Value(Value::Int64(1)));
         layer.prims.insert(prim, spec);
         store.insert_layer(layer);
 
         let mut live = LiveStage::compose(&mut store, LayerId(1), StageOptions::default());
         assert_eq!(
             live.stage().resolve_field(prim, field_x).unwrap().value,
-            Value::Int(1)
+            Value::Int64(1)
         );
 
         // Mutate the layer in the store.
@@ -330,7 +330,7 @@ mod tests {
             let layer = store.layers.get_mut(&LayerId(1)).unwrap();
             let spec = layer.prims.get_mut(&prim).unwrap();
             spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int(99)));
+                .insert(field_x, FieldValue::Value(Value::Int64(99)));
         }
 
         // Notify and recompose.
@@ -340,7 +340,7 @@ mod tests {
         assert!(updated.contains(&prim), "affected prim should be returned");
         assert_eq!(
             live.stage().resolve_field(prim, field_x).unwrap().value,
-            Value::Int(99)
+            Value::Int64(99)
         );
     }
 
@@ -406,14 +406,14 @@ mod tests {
         let mut q_spec = PrimSpec::default();
         q_spec
             .fields
-            .insert(field_x, FieldValue::Value(Value::Int(10)));
+            .insert(field_x, FieldValue::Value(Value::Int64(10)));
         ref_layer.prims.insert(prim_q, q_spec);
         store.insert_layer(ref_layer);
 
         let mut live = LiveStage::compose(&mut store, LayerId(1), StageOptions::default());
         assert_eq!(
             live.stage().resolve_field(prim_p, field_x).unwrap().value,
-            Value::Int(10)
+            Value::Int64(10)
         );
 
         // Edit the referenced layer.
@@ -421,7 +421,7 @@ mod tests {
             let layer = store.layers.get_mut(&LayerId(2)).unwrap();
             let spec = layer.prims.get_mut(&prim_q).unwrap();
             spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int(77)));
+                .insert(field_x, FieldValue::Value(Value::Int64(77)));
         }
 
         live.notify_layer_edit(LayerId(2));
@@ -434,7 +434,7 @@ mod tests {
         );
         assert_eq!(
             live.stage().resolve_field(prim_p, field_x).unwrap().value,
-            Value::Int(77)
+            Value::Int64(77)
         );
     }
 
@@ -453,7 +453,7 @@ mod tests {
         let mut spec2 = PrimSpec::default();
         spec2
             .fields
-            .insert(field_x, FieldValue::Value(Value::Int(10)));
+            .insert(field_x, FieldValue::Value(Value::Int64(10)));
         layer2.prims.insert(prim, spec2);
         store.insert_layer(layer2);
 
@@ -465,7 +465,7 @@ mod tests {
         let mut spec1 = PrimSpec::default();
         spec1
             .fields
-            .insert(field_x, FieldValue::Value(Value::Int(20)));
+            .insert(field_x, FieldValue::Value(Value::Int64(20)));
         layer1.prims.insert(prim, spec1);
         store.insert_layer(layer1);
 
@@ -473,7 +473,7 @@ mod tests {
         // Layer 1 is stronger, so x = 20.
         assert_eq!(
             live.stage().resolve_field(prim, field_x).unwrap().value,
-            Value::Int(20)
+            Value::Int64(20)
         );
 
         // Edit the weaker layer — value should stay 20.
@@ -481,14 +481,14 @@ mod tests {
             let layer = store.layers.get_mut(&LayerId(2)).unwrap();
             let spec = layer.prims.get_mut(&prim).unwrap();
             spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int(99)));
+                .insert(field_x, FieldValue::Value(Value::Int64(99)));
         }
         live.notify_layer_edit(LayerId(2));
         let updated = live.recompose(&mut store);
         assert!(updated.contains(&prim));
         assert_eq!(
             live.stage().resolve_field(prim, field_x).unwrap().value,
-            Value::Int(20),
+            Value::Int64(20),
             "stronger layer opinion should still win"
         );
 
@@ -497,14 +497,14 @@ mod tests {
             let layer = store.layers.get_mut(&LayerId(1)).unwrap();
             let spec = layer.prims.get_mut(&prim).unwrap();
             spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int(55)));
+                .insert(field_x, FieldValue::Value(Value::Int64(55)));
         }
         live.notify_layer_edit(LayerId(1));
         let updated = live.recompose(&mut store);
         assert!(updated.contains(&prim));
         assert_eq!(
             live.stage().resolve_field(prim, field_x).unwrap().value,
-            Value::Int(55),
+            Value::Int64(55),
             "updated stronger opinion should resolve"
         );
     }
@@ -525,7 +525,7 @@ mod tests {
         let mut class_spec = PrimSpec::default();
         class_spec
             .fields
-            .insert(field_x, FieldValue::Value(Value::Int(42)));
+            .insert(field_x, FieldValue::Value(Value::Int64(42)));
         layer.prims.insert(class_c, class_spec);
         // /P inherits from /Class_C.
         let mut p_spec = PrimSpec::default();
@@ -536,7 +536,7 @@ mod tests {
         let mut live = LiveStage::compose(&mut store, LayerId(1), StageOptions::default());
         assert_eq!(
             live.stage().resolve_field(prim_p, field_x).unwrap().value,
-            Value::Int(42),
+            Value::Int64(42),
             "P should inherit x from Class_C"
         );
 
@@ -545,14 +545,14 @@ mod tests {
             let layer = store.layers.get_mut(&LayerId(1)).unwrap();
             let spec = layer.prims.get_mut(&class_c).unwrap();
             spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int(100)));
+                .insert(field_x, FieldValue::Value(Value::Int64(100)));
         }
         live.notify_layer_edit(LayerId(1));
         let updated = live.recompose(&mut store);
 
         assert_eq!(
             live.stage().resolve_field(prim_p, field_x).unwrap().value,
-            Value::Int(100),
+            Value::Int64(100),
             "P should see updated inherited value"
         );
         // Both class_c and prim_p should be in the affected set.
@@ -579,7 +579,7 @@ mod tests {
         let mut a_spec = PrimSpec::default();
         a_spec
             .fields
-            .insert(field_x, FieldValue::Value(Value::Int(1)));
+            .insert(field_x, FieldValue::Value(Value::Int64(1)));
         layer1.prims.insert(prim_a, a_spec);
         store.insert_layer(layer1);
 
@@ -591,7 +591,7 @@ mod tests {
         let mut b_spec = PrimSpec::default();
         b_spec
             .fields
-            .insert(field_y, FieldValue::Value(Value::Int(2)));
+            .insert(field_y, FieldValue::Value(Value::Int64(2)));
         layer2.prims.insert(prim_b, b_spec);
         store.insert_layer(layer2);
 
@@ -602,13 +602,13 @@ mod tests {
             let layer = store.layers.get_mut(&LayerId(1)).unwrap();
             let spec = layer.prims.get_mut(&prim_a).unwrap();
             spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int(11)));
+                .insert(field_x, FieldValue::Value(Value::Int64(11)));
         }
         {
             let layer = store.layers.get_mut(&LayerId(2)).unwrap();
             let spec = layer.prims.get_mut(&prim_b).unwrap();
             spec.fields
-                .insert(field_y, FieldValue::Value(Value::Int(22)));
+                .insert(field_y, FieldValue::Value(Value::Int64(22)));
         }
 
         // Batch notify both layers, then recompose once.
@@ -620,11 +620,11 @@ mod tests {
         assert!(updated.contains(&prim_b), "B should be updated");
         assert_eq!(
             live.stage().resolve_field(prim_a, field_x).unwrap().value,
-            Value::Int(11)
+            Value::Int64(11)
         );
         assert_eq!(
             live.stage().resolve_field(prim_b, field_y).unwrap().value,
-            Value::Int(22)
+            Value::Int64(22)
         );
     }
 
@@ -641,7 +641,7 @@ mod tests {
         };
         let mut spec = PrimSpec::default();
         spec.fields
-            .insert(field_x, FieldValue::Value(Value::Int(1)));
+            .insert(field_x, FieldValue::Value(Value::Int64(1)));
         layer.prims.insert(prim, spec);
         store.insert_layer(layer);
 
@@ -652,7 +652,7 @@ mod tests {
             let layer = store.layers.get_mut(&LayerId(1)).unwrap();
             let spec = layer.prims.get_mut(&prim).unwrap();
             spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int(99)));
+                .insert(field_x, FieldValue::Value(Value::Int64(99)));
         }
         live.notify_layer_edit(LayerId(1));
         let first = live.recompose(&mut store);
@@ -663,7 +663,7 @@ mod tests {
         assert!(second.is_empty(), "second recompose should be a no-op");
         assert_eq!(
             live.stage().resolve_field(prim, field_x).unwrap().value,
-            Value::Int(99),
+            Value::Int64(99),
             "value should be stable after idempotent recompose"
         );
     }
@@ -689,7 +689,7 @@ mod tests {
         });
         p_spec
             .fields
-            .insert(field_x, FieldValue::Value(Value::Int(1)));
+            .insert(field_x, FieldValue::Value(Value::Int64(1)));
         root.prims.insert(prim_p, p_spec);
         store.insert_layer(root);
 
@@ -701,7 +701,7 @@ mod tests {
         let mut q_spec = PrimSpec::default();
         q_spec
             .fields
-            .insert(field_x, FieldValue::Value(Value::Int(100)));
+            .insert(field_x, FieldValue::Value(Value::Int64(100)));
         ref_layer.prims.insert(prim_q, q_spec);
         store.insert_layer(ref_layer);
 
@@ -712,7 +712,7 @@ mod tests {
             let layer = store.layers.get_mut(&LayerId(2)).unwrap();
             let spec = layer.prims.get_mut(&prim_q).unwrap();
             spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int(200)));
+                .insert(field_x, FieldValue::Value(Value::Int64(200)));
         }
 
         live.notify_layer_edit(LayerId(2));
@@ -743,13 +743,13 @@ mod tests {
         let mut a_spec = PrimSpec::default();
         a_spec
             .fields
-            .insert(field_x, FieldValue::Value(Value::Int(1)));
+            .insert(field_x, FieldValue::Value(Value::Int64(1)));
         layer.prims.insert(prim_a, a_spec);
 
         let mut b_spec = PrimSpec::default();
         b_spec
             .fields
-            .insert(field_x, FieldValue::Value(Value::Int(2)));
+            .insert(field_x, FieldValue::Value(Value::Int64(2)));
         layer.prims.insert(prim_b, b_spec);
         store.insert_layer(layer);
 
@@ -760,7 +760,7 @@ mod tests {
             let layer = store.layers.get_mut(&LayerId(1)).unwrap();
             let spec = layer.prims.get_mut(&prim_a).unwrap();
             spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int(99)));
+                .insert(field_x, FieldValue::Value(Value::Int64(99)));
         }
         live.notify_prim_edit(prim_a);
         let updated = live.recompose(&mut store);
@@ -775,7 +775,7 @@ mod tests {
         );
         assert_eq!(
             live.stage().resolve_field(prim_b, field_x).unwrap().value,
-            Value::Int(2),
+            Value::Int64(2),
             "B's value should be unchanged"
         );
     }
