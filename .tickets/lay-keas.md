@@ -27,3 +27,7 @@ All upstream composition fixtures for payloads, specializes, and relocates pass.
 **2026-03-14T01:57:11Z**
 
 Variant children filtering + variant opinion forwarding committed (81701d8). VariantSets arc now correctly: parses variant selections/ordering/branches, filters children to selected branches, forwards variant opinions through references. 4 new conformance tests passing: TrickyVariantAncestralSelection, BasicSpecializesAndVariants, TrickyVariantWeakerSelection3, TrickyVariantInPayload.
+
+**2026-03-15T18:21:42Z**
+
+Incremental recomposition (lay-cr9t) closed: LiveStage with InvalidationGraph, lazy propagation, scoped recompose via PopulationMask. Commits 58d43aa, 9c49c95, d41eba6.

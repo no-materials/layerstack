@@ -35,7 +35,10 @@ use layerstack::doc::LayerStore;
 /// fetcher. Here we use closures that build layers programmatically.
 struct AssetCatalog {
     /// URI to builder function.
-    #[allow(clippy::type_complexity, reason = "example code, clarity over abstraction")]
+    #[allow(
+        clippy::type_complexity,
+        reason = "example code, clarity over abstraction"
+    )]
     builders: StdHashMap<String, Box<dyn Fn(&mut TokenInterner, &mut PathInterner) -> Layer>>,
 }
 

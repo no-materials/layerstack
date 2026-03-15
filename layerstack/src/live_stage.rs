@@ -91,7 +91,11 @@ impl LiveStage {
         }
     }
 
-    /// Notifies that a single prim's opinions have changed.
+    /// Notifies that a specific prim's opinions in `layer` have changed.
+    ///
+    /// This is more precise than [`notify_layer_edit`](Self::notify_layer_edit):
+    /// only the named prim is marked dirty (plus its transitive dependents at
+    /// drain time), rather than every prim that receives opinions from the layer.
     pub fn notify_prim_edit(&mut self, prim: PathId) {
         self.invalidated.mark(prim, OPINION_EDIT);
     }

@@ -4,7 +4,7 @@
 //!
 //! Spec: AOUSD Core §8 (paths and namespace ordering).
 
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 use core::cmp::Ordering;
 
@@ -129,6 +129,22 @@ impl Path {
         self.segments.last().copied()
     }
 
+    /// Formats this path as a string (e.g. `/Robot/Arm`).
+    ///
+    /// Requires a [`TokenInterner`] to resolve segment names.
+    #[must_use]
+    pub fn display(&self, tokens: &TokenInterner) -> String {
+        if self.segments.is_empty() {
+            return String::from("/");
+        }
+        let mut out = String::new();
+        for &seg in self.segments.iter() {
+            out.push('/');
+            out.push_str(tokens.resolve(seg));
+        }
+        out
+    }
+
     /// Compares paths using AOUSD-style namespace ordering.
     ///
     /// This compares each segment lexicographically by its resolved token
@@ -182,6 +198,14 @@ impl PathInterner {
     #[must_use]
     pub fn lookup(&self, path: &Path) -> Option<PathId> {
         self.by_path.get(path).copied()
+    }
+
+    /// Formats a [`PathId`] as a string (e.g. `/Robot/Arm`).
+    ///
+    /// This is a convenience for `self.resolve(id).display(tokens)`.
+    #[must_use]
+    pub fn display(&self, id: PathId, tokens: &TokenInterner) -> String {
+        self.resolve(id).display(tokens)
     }
 }
 
