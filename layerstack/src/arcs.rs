@@ -55,6 +55,27 @@ pub(crate) fn resolve_variant_selections_for_prim(
     selected
 }
 
+/// Resolves only the direct PrimSpec.references for a prim, without variant
+/// branch-level or parent variant child references. Use this when variant
+/// refs are resolved separately with proper selection stacks.
+pub(crate) fn resolve_direct_references_for_prim(
+    store: &dyn LayerStore,
+    local_stack: &LayerStack,
+    prim: PathId,
+) -> Vec<Reference> {
+    let mut ops = Vec::new();
+    for layer_id in &local_stack.layers {
+        let Some(layer) = store.layer(*layer_id) else {
+            continue;
+        };
+        let Some(spec) = layer.prims.get(&prim) else {
+            continue;
+        };
+        ops.push(spec.references.clone());
+    }
+    resolve_list_chain::<Reference>(&[], ops)
+}
+
 pub(crate) fn resolve_references_for_prim(
     store: &dyn LayerStore,
     local_stack: &LayerStack,

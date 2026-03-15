@@ -13,7 +13,8 @@ use hashbrown::{HashMap, HashSet};
 
 use crate::{
     arcs::{
-        resolve_inherits_for_prim, resolve_payloads_for_prim, resolve_references_for_prim,
+        resolve_direct_references_for_prim, resolve_inherits_for_prim,
+        resolve_payloads_for_prim, resolve_references_for_prim,
         resolve_specializes_for_prim, resolve_variant_branch_references,
         resolve_variant_child_references, resolve_variant_selections_for_prim,
     },
@@ -148,6 +149,34 @@ fn filter_variant_children(
             }
         }
 
+        // Expand selections from within selected variant branches (chaining).
+        loop {
+            let mut new_sels = HashMap::new();
+            for source in &prim_index.sources {
+                let Some(layer) = store.layer(source.layer_id) else {
+                    continue;
+                };
+                let Some(spec) = layer.prims.get(&source.spec_path) else {
+                    continue;
+                };
+                for (set, selected_variant) in &selections {
+                    if let Some(set_spec) = spec.variant_sets.get(set)
+                        && let Some(variant_spec) = set_spec.variants.get(selected_variant)
+                    {
+                        for (inner_set, inner_variant) in &variant_spec.variant_selections {
+                            if !selections.contains_key(inner_set) {
+                                new_sels.entry(*inner_set).or_insert(*inner_variant);
+                            }
+                        }
+                    }
+                }
+            }
+            if new_sels.is_empty() {
+                break;
+            }
+            selections.extend(new_sels);
+        }
+
         // Then check each source for variant sets.
         for source in &prim_index.sources {
             let Some(layer) = store.layer(source.layer_id) else {
@@ -163,7 +192,17 @@ fn filter_variant_children(
                         has_variant_sets = true;
                         all_variant_children.insert(*child);
                         if selections.get(set_name) == Some(variant_name) {
-                            selected_children.insert(*child);
+                            // Check outer variant requirements for nested children.
+                            let outer_ok = variant_spec
+                                .required_outer_selections
+                                .get(child)
+                                .map_or(true, |reqs| {
+                                    reqs.iter()
+                                        .all(|(s, v)| selections.get(s) == Some(v))
+                                });
+                            if outer_ok {
+                                selected_children.insert(*child);
+                            }
                         }
                     }
                 }
@@ -526,6 +565,36 @@ fn resolve_full_variant_selections(
         for (set, variant) in ref_selections {
             selections.entry(set).or_insert(variant);
         }
+    }
+
+    // Gather variant selections from within selected variant branches.
+    // A stronger variant branch can provide selections for weaker variant sets.
+    // Iterate until no new selections are discovered (handles chaining).
+    loop {
+        let mut new_selections = HashMap::new();
+        for layer_id in &local_stack.layers {
+            let Some(layer) = store.layer(*layer_id) else {
+                continue;
+            };
+            let Some(spec) = layer.prims.get(&path) else {
+                continue;
+            };
+            for (set, selected_variant) in &selections {
+                if let Some(set_spec) = spec.variant_sets.get(set)
+                    && let Some(variant_spec) = set_spec.variants.get(selected_variant)
+                {
+                    for (inner_set, inner_variant) in &variant_spec.variant_selections {
+                        if !selections.contains_key(inner_set) {
+                            new_selections.entry(*inner_set).or_insert(*inner_variant);
+                        }
+                    }
+                }
+            }
+        }
+        if new_selections.is_empty() {
+            break;
+        }
+        selections.extend(new_selections);
     }
 
     selections
@@ -1735,7 +1804,9 @@ fn add_reference_edge_opinions(
             );
         }
 
-        let nested = resolve_references_for_prim(store, &remote_stack, remote_path_id);
+        // Use direct refs only — variant branch and child refs are resolved
+        // separately below with the combined_stack for proper selection handling.
+        let nested = resolve_direct_references_for_prim(store, &remote_stack, remote_path_id);
         // Also resolve variant-scoped child references using combined_stack
         // for selections, so referencing layer's variant selections override
         // the referenced layer's defaults.
@@ -2106,7 +2177,9 @@ fn add_payload_edge_opinions(
             );
         }
 
-        let nested = resolve_references_for_prim(store, &remote_stack, remote_path_id);
+        // Use direct refs only — variant branch refs are handled by
+        // add_reference_edge_opinions internally with proper selection stacks.
+        let nested = resolve_direct_references_for_prim(store, &remote_stack, remote_path_id);
         for (nested_index, nested_ref) in nested.into_iter().enumerate() {
             let nested_index = u16::try_from(nested_index).unwrap_or(u16::MAX);
             let namespace_depth =

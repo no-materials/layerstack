@@ -144,7 +144,12 @@ struct PrimDef {
     variant_selections: Vec<(String, String)>,
     variant_set_names: Vec<String>,
     /// If this prim is inside a variant branch: (parent_path, set_name, branch_name).
+    /// The full_variant_context contains ALL ancestor variant branches, from outermost to
+    /// innermost. This is needed for nested variant sets to correctly filter children
+    /// that require multiple ancestor variant selections to be active.
     variant_parent: Option<(String, String, String)>,
+    /// Full variant context chain: (owning_prim_path, set_name, branch_name).
+    full_variant_context: Vec<(String, String, String)>,
     /// Fields defined inside variant branches of this prim: (set_name, branch_name, attr_name).
     variant_fields: Vec<(String, String, String)>,
     /// Composition arcs on child prims inside variant branches of this prim.
@@ -174,6 +179,7 @@ struct VariantBranchArc {
     inherits: InheritsDef,
     specializes: SpecializesDef,
     payloads: PayloadsDef,
+    variant_selections: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -270,6 +276,12 @@ enum BraceKind {
     VariantSet(String),
     /// A variant branch `"name" { ... }` inside a variant set.
     VariantBranch(String, String), // (set_name, branch_name)
+    /// A variant branch whose `{` was on the `) {` closing line of multi-line
+    /// metadata. Tracked for brace balance and `full_variant_context` but NOT
+    /// returned by `current_variant_context`, preserving existing behaviour for
+    /// prims inside these branches (e.g. `over` prims should not get a
+    /// variant_parent change).
+    VariantBranchMeta(String, String), // (set_name, branch_name)
     /// Any other brace scope (e.g., `variants = { ... }`).
     Other,
 }
@@ -290,6 +302,39 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
             }
         }
         None
+    }
+
+    /// Returns ALL variant branch contexts from outermost to innermost,
+    /// with the owning prim path for each context determined by the Prim
+    /// braces in the brace stack.
+    fn full_variant_context(
+        brace_stack: &[BraceKind],
+        scope: &[String],
+    ) -> Vec<(String, String, String)> {
+        let mut ctx = Vec::new();
+        // Track the owning prim path as we walk the brace stack.
+        let mut prim_scope: Vec<&str> = Vec::new();
+        for kind in brace_stack.iter() {
+            match kind {
+                BraceKind::Prim => {
+                    // The next scope element corresponds to this Prim brace.
+                    if prim_scope.len() < scope.len() {
+                        prim_scope.push(&scope[prim_scope.len()]);
+                    }
+                }
+                BraceKind::VariantBranch(set, branch)
+                | BraceKind::VariantBranchMeta(set, branch) => {
+                    let owner = if prim_scope.is_empty() {
+                        String::new()
+                    } else {
+                        format!("/{}", prim_scope.join("/"))
+                    };
+                    ctx.push((owner, set.clone(), branch.clone()));
+                }
+                _ => {}
+            }
+        }
+        ctx
     }
 
     // Find the owning prim path for the current scope (skip variant set/branch braces).
@@ -606,10 +651,14 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
             } else {
                 // Multi-line metadata: read until `)`
                 let mut accumulator: Option<String> = None;
+                let mut closing_line_has_brace = false;
                 while let Some(spec_line) = lines.peek() {
                     let spec_line = spec_line.trim();
                     if spec_line.starts_with(')') {
-                        lines.next();
+                        let consumed = lines.next().unwrap();
+                        if consumed.contains('{') {
+                            closing_line_has_brace = true;
+                        }
                         break;
                     }
                     let consumed = lines.next().unwrap().trim().to_string();
@@ -633,12 +682,26 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                 if let Some(acc) = accumulator {
                     meta_lines.push(acc);
                 }
+                // If the closing `) {` line contained a `{`, push a brace entry
+                // for proper balance. Use VariantBranchMeta to track the variant
+                // context in full_variant_context without affecting current_variant_context.
+                if closing_line_has_brace {
+                    let vb_set = match brace_stack.last() {
+                        Some(BraceKind::VariantSet(s)) => s.clone(),
+                        _ => String::new(),
+                    };
+                    brace_stack.push(BraceKind::VariantBranchMeta(
+                        vb_set,
+                        branch_name.clone(),
+                    ));
+                }
             }
 
             let mut branch_refs = ReferencesDef::default();
             let mut branch_inherits = InheritsDef::default();
             let mut branch_specializes = SpecializesDef::default();
             let mut branch_payloads = PayloadsDef::default();
+            let mut branch_variant_selections: Vec<(String, String)> = Vec::new();
 
             for meta_line in &meta_lines {
                 if let Some((op, specs)) = parse_references_line(meta_line) {
@@ -669,6 +732,9 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                         RefOp::Append => branch_payloads.append.extend(specs),
                     }
                 }
+                if let Some(sels) = parse_variant_selections_line(meta_line) {
+                    branch_variant_selections.extend(sels);
+                }
             }
 
             let has_arcs = branch_refs.explicit.is_some()
@@ -682,7 +748,8 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                 || !branch_specializes.append.is_empty()
                 || branch_payloads.explicit.is_some()
                 || !branch_payloads.prepend.is_empty()
-                || !branch_payloads.append.is_empty();
+                || !branch_payloads.append.is_empty()
+                || !branch_variant_selections.is_empty();
 
             if has_arcs {
                 // Find the owning prim's PrimDef and add the variant branch arcs.
@@ -694,6 +761,7 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                         inherits: branch_inherits,
                         specializes: branch_specializes,
                         payloads: branch_payloads,
+                        variant_selections: branch_variant_selections,
                     });
                 }
             }
@@ -705,6 +773,7 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                     if let Some(pending) = pending.take() {
                         let variant_parent = current_variant_context(&brace_stack)
                             .map(|(set, branch)| (owning_prim_path(&scope), set, branch));
+                        let fvc = full_variant_context(&brace_stack, &scope);
                         scope.push(pending.name.clone());
                         brace_stack.push(BraceKind::Prim);
                         out.push(PrimDef {
@@ -724,6 +793,7 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                             variant_selections: pending.variant_selections,
                             variant_set_names: pending.variant_set_names,
                             variant_parent,
+                            full_variant_context: fvc,
                             variant_fields: Vec::new(),
                             variant_child_arcs: Vec::new(),
                             variant_branch_arcs: Vec::new(),
@@ -1575,6 +1645,13 @@ fn load_layer_with_prims(
                 .insert(set.clone());
         }
     }
+    // Required outer variant selections for nested variant children.
+    // Key: (parent_path, set, branch, child_leaf) → Vec<(outer_set, outer_branch)>
+    let mut nested_variant_requirements: std::collections::HashMap<
+        (String, String, String, String),
+        Vec<(String, String)>,
+    > = std::collections::HashMap::new();
+
     for (_, prim) in &prim_defs_with_ids {
         if let Some((parent_path, set, branch)) = &prim.variant_parent {
             let leaf = prim.path.rsplit('/').next().unwrap_or("");
@@ -1612,6 +1689,30 @@ fn load_layer_with_prims(
                     .entry((parent_path.clone(), set.clone(), branch.clone()))
                     .or_default()
                     .push(leaf.to_string());
+
+                // If this child has a deeper variant context (nested variant
+                // branches), record the outer requirements so the composition
+                // can filter children whose outer context doesn't match.
+                // Only include outer contexts from the SAME prim (parent_path),
+                // since selections from ancestor prims are handled separately.
+                if prim.full_variant_context.len() > 1 {
+                    let outer: Vec<(String, String)> = prim.full_variant_context
+                        [..prim.full_variant_context.len() - 1]
+                        .iter()
+                        .filter(|(owner, _, _)| owner == parent_path)
+                        .map(|(_, s, b)| (s.clone(), b.clone()))
+                        .collect();
+                    if !outer.is_empty() {
+                        nested_variant_requirements
+                            .entry((
+                                parent_path.clone(),
+                                set.clone(),
+                                branch.clone(),
+                                leaf.to_string(),
+                            ))
+                            .or_insert(outer);
+                    }
+                }
             }
         }
     }
@@ -1881,6 +1982,23 @@ fn load_layer_with_prims(
                         if !variant_spec.authored_children.contains(&child_tok) {
                             variant_spec.authored_children.push(child_tok);
                         }
+                        // Record outer variant requirements for nested children.
+                        if let Some(outer) = nested_variant_requirements.get(&(
+                            parent.clone(),
+                            s.clone(),
+                            branch.clone(),
+                            child_name.clone(),
+                        )) {
+                            let outer_toks: Vec<(layerstack::interner::TokenId, layerstack::interner::TokenId)> = outer
+                                .iter()
+                                .map(|(os, ob)| {
+                                    (store.tokens.intern(os), store.tokens.intern(ob))
+                                })
+                                .collect();
+                            variant_spec
+                                .required_outer_selections
+                                .insert(child_tok, outer_toks);
+                        }
                     }
                 }
             }
@@ -2064,6 +2182,11 @@ fn load_layer_with_prims(
                         by_path,
                         layer_names,
                     );
+                    for (set_name_sel, selected) in &arc.variant_selections {
+                        let set_tok = store.tokens.intern(set_name_sel);
+                        let sel_tok = store.tokens.intern(selected);
+                        variant_spec.variant_selections.insert(set_tok, sel_tok);
+                    }
                 }
             }
         }

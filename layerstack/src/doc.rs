@@ -122,6 +122,13 @@ pub struct VariantSpec {
     ///
     /// These children are only populated when this variant is selected.
     pub authored_children: Vec<TokenId>,
+    /// For children that exist within nested variant branches, this records the
+    /// additional outer variant selections required for the child to be visible.
+    /// Only populated for children from deeply nested variant contexts.
+    ///
+    /// E.g., a child from `standin=render > shadingVariant=spooky` registered
+    /// under `shadingVariant=spooky` would have `{child_tok: [(standin_tok, render_tok)]}`.
+    pub required_outer_selections: HashMap<TokenId, Vec<(TokenId, TokenId)>>,
     /// Composition arcs for child prims within this variant branch.
     ///
     /// When a child prim (e.g. `over "Child" (add references = ...)`) appears
@@ -163,6 +170,11 @@ pub struct VariantSpec {
     pub specializes: ListOp<PathId>,
     /// Payloads on this variant branch itself.
     pub payloads: ListOp<Reference>,
+    /// Variant selections authored within this variant branch.
+    ///
+    /// When a variant branch header includes `variants = { string v2 = "b" }`,
+    /// those selections apply to the owning prim when this variant is selected.
+    pub variant_selections: HashMap<TokenId, TokenId>,
 }
 
 /// A variant set: a named collection of variants.

@@ -158,11 +158,32 @@ fn assert_pcp_composing(loaded: &mut LoadedStage, pcp_path: &Path) {
                         .clone();
                 let expected_path_id = loaded.store.paths.intern(expected_path);
 
+                let found = actual
+                    .iter()
+                    .any(|(layer_id, spec_path)| *layer_id == expected_layer
+                        && *spec_path == expected_path_id);
+                if !found {
+                    eprintln!("  Prim stack for {prim_path}:");
+                    for (lid, sid) in &actual {
+                        let lname = loaded.layer_names.get(lid).cloned().unwrap_or_default();
+                        let sp = loaded.store.paths.resolve(*sid);
+                        let mut segs = Vec::new();
+                        let mut cur = sp.clone();
+                        while let Some(leaf) = cur.leaf() {
+                            segs.push(loaded.store.tokens.resolve(leaf).to_string());
+                            if let Some(parent) = cur.parent() {
+                                cur = parent;
+                            } else {
+                                break;
+                            }
+                        }
+                        segs.reverse();
+                        let p_str = format!("/{}", segs.join("/"));
+                        eprintln!("    {lname}: {p_str}");
+                    }
+                }
                 assert!(
-                    actual
-                        .iter()
-                        .any(|(layer_id, spec_path)| *layer_id == expected_layer
-                            && *spec_path == expected_path_id),
+                    found,
                     "missing prim stack entry for {prim_path}: expected {layer_name} {expected_spec}"
                 );
             }
@@ -510,7 +531,7 @@ fn tricky_nested_specializes2_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires variant-in-path prim stack notation"]
+#[ignore = "requires payload arc with variant selection chaining across referenced layers"]
 fn tricky_variant_selection_in_variant_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("TrickyVariantSelectionInVariant_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
@@ -518,10 +539,10 @@ fn tricky_variant_selection_in_variant_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires variant-in-path prim stack notation"]
 fn tricky_variant_selection_in_variant2_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("TrickyVariantSelectionInVariant2_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
+
     assert_pcp_composing(&mut loaded, &pcp_path);
 }
 
