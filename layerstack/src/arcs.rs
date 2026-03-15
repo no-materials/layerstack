@@ -149,6 +149,8 @@ pub(crate) fn resolve_references_for_prim(
 /// the PrimSpec data lives in the remote stack, but variant selections should
 /// come from the combined stack (which includes the referencing layer's
 /// stronger selections).
+///
+/// Includes variant selection chaining through inherited variant sets.
 pub(crate) fn resolve_variant_child_references(
     store: &dyn LayerStore,
     data_stack: &LayerStack,
@@ -164,23 +166,77 @@ pub(crate) fn resolve_variant_child_references(
         return Vec::new();
     };
 
-    let parent_selections =
-        resolve_variant_selections_for_prim(store, selections_stack, parent_id);
-
-    let mut ops = Vec::new();
-    for layer_id in &data_stack.layers {
+    // Resolve parent selections with inherit-based chaining.
+    let inherits = resolve_inherits_for_prim(store, selections_stack, parent_id);
+    let mut parent_selections = HashMap::new();
+    for layer_id in &selections_stack.layers {
         let Some(layer) = store.layer(*layer_id) else {
             continue;
         };
-        let Some(parent_spec) = layer.prims.get(&parent_id) else {
-            continue;
-        };
-        for (set_tok, selected_variant) in &parent_selections {
-            if let Some(set_spec) = parent_spec.variant_sets.get(set_tok)
-                && let Some(variant_spec) = set_spec.variants.get(selected_variant)
-                && let Some(child_refs) = variant_spec.child_references.get(&leaf)
-            {
-                ops.push(child_refs.clone());
+        if let Some(spec) = layer.prims.get(&parent_id) {
+            for (set, variant) in &spec.variant_selections {
+                parent_selections.entry(*set).or_insert(*variant);
+            }
+        }
+        for inherit_target in &inherits {
+            if let Some(inherit_spec) = layer.prims.get(inherit_target) {
+                for (set, variant) in &inherit_spec.variant_selections {
+                    parent_selections.entry(*set).or_insert(*variant);
+                }
+            }
+        }
+    }
+
+    // Chain through variant branch selections (check inherited variant sets too).
+    let check_paths: Vec<PathId> = core::iter::once(parent_id)
+        .chain(inherits.iter().copied())
+        .collect();
+    loop {
+        let mut new_sels = HashMap::new();
+        for &check_path in &check_paths {
+            for layer_id in &selections_stack.layers {
+                let Some(layer) = store.layer(*layer_id) else {
+                    continue;
+                };
+                let Some(spec) = layer.prims.get(&check_path) else {
+                    continue;
+                };
+                for (set, selected_variant) in &parent_selections {
+                    if let Some(set_spec) = spec.variant_sets.get(set)
+                        && let Some(variant_spec) = set_spec.variants.get(selected_variant)
+                    {
+                        for (inner_set, inner_variant) in &variant_spec.variant_selections {
+                            if !parent_selections.contains_key(inner_set) {
+                                new_sels.entry(*inner_set).or_insert(*inner_variant);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if new_sels.is_empty() {
+            break;
+        }
+        parent_selections.extend(new_sels);
+    }
+
+    let mut ops = Vec::new();
+    // Check variant sets from parent and its inherit targets.
+    for &check_path in &check_paths {
+        for layer_id in &data_stack.layers {
+            let Some(layer) = store.layer(*layer_id) else {
+                continue;
+            };
+            let Some(spec) = layer.prims.get(&check_path) else {
+                continue;
+            };
+            for (set_tok, selected_variant) in &parent_selections {
+                if let Some(set_spec) = spec.variant_sets.get(set_tok)
+                    && let Some(variant_spec) = set_spec.variants.get(selected_variant)
+                    && let Some(child_refs) = variant_spec.child_references.get(&leaf)
+                {
+                    ops.push(child_refs.clone());
+                }
             }
         }
     }
@@ -309,6 +365,122 @@ pub(crate) fn collect_all_variant_branch_references(
         }
     }
     all_refs
+}
+
+/// Resolves variant branch-level payloads using a separate stack for variant
+/// selection resolution. Similar to `resolve_variant_branch_references` but
+/// for payload arcs on variant branch headers.
+pub(crate) fn resolve_variant_branch_payloads(
+    store: &dyn LayerStore,
+    data_stack: &LayerStack,
+    selections_stack: &LayerStack,
+    prim: PathId,
+) -> Vec<Reference> {
+    let inherits = resolve_inherits_for_prim(store, selections_stack, prim);
+    let mut selections = HashMap::new();
+    for layer_id in &selections_stack.layers {
+        let Some(layer) = store.layer(*layer_id) else {
+            continue;
+        };
+        if let Some(spec) = layer.prims.get(&prim) {
+            for (set, variant) in &spec.variant_selections {
+                selections.entry(*set).or_insert(*variant);
+            }
+        }
+        for inherit_target in &inherits {
+            if let Some(inherit_spec) = layer.prims.get(inherit_target) {
+                for (set, variant) in &inherit_spec.variant_selections {
+                    selections.entry(*set).or_insert(*variant);
+                }
+            }
+        }
+    }
+
+    // Also chain through variant branch selections (from inherited variant sets too).
+    let check_paths: Vec<PathId> = core::iter::once(prim)
+        .chain(inherits.iter().copied())
+        .collect();
+    loop {
+        let mut new_sels = HashMap::new();
+        for &check_path in &check_paths {
+            for layer_id in &selections_stack.layers {
+                let Some(layer) = store.layer(*layer_id) else {
+                    continue;
+                };
+                let Some(spec) = layer.prims.get(&check_path) else {
+                    continue;
+                };
+                for (set, selected_variant) in &selections {
+                    if let Some(set_spec) = spec.variant_sets.get(set)
+                        && let Some(variant_spec) = set_spec.variants.get(selected_variant)
+                    {
+                        for (inner_set, inner_variant) in &variant_spec.variant_selections {
+                            if !selections.contains_key(inner_set) {
+                                new_sels.entry(*inner_set).or_insert(*inner_variant);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if new_sels.is_empty() {
+            break;
+        }
+        selections.extend(new_sels);
+    }
+
+    let mut ops = Vec::new();
+    for &check_path in &check_paths {
+        for layer_id in &data_stack.layers {
+            let Some(layer) = store.layer(*layer_id) else {
+                continue;
+            };
+            let Some(spec) = layer.prims.get(&check_path) else {
+                continue;
+            };
+            for (set_tok, selected_variant) in &selections {
+                if let Some(set_spec) = spec.variant_sets.get(set_tok)
+                    && let Some(variant_spec) = set_spec.variants.get(selected_variant)
+                {
+                    let vp = &variant_spec.payloads;
+                    if vp.explicit.is_some() || !vp.prepend.is_empty() || !vp.append.is_empty() {
+                        ops.push(vp.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    resolve_list_chain::<Reference>(&[], ops)
+}
+
+/// Collects ALL variant branch-level payloads for a prim from all variant
+/// branches, regardless of selection. Used during population to ensure all
+/// potentially-loaded prims are discovered.
+pub(crate) fn collect_all_variant_branch_payloads(
+    store: &dyn LayerStore,
+    local_stack: &LayerStack,
+    prim: PathId,
+) -> Vec<Reference> {
+    let mut all_payloads = Vec::new();
+    for layer_id in &local_stack.layers {
+        let Some(layer) = store.layer(*layer_id) else {
+            continue;
+        };
+        let Some(spec) = layer.prims.get(&prim) else {
+            continue;
+        };
+        for (_set_tok, set_spec) in &spec.variant_sets {
+            for (_variant_tok, variant_spec) in &set_spec.variants {
+                let vp = &variant_spec.payloads;
+                if vp.explicit.is_some() || !vp.prepend.is_empty() || !vp.append.is_empty() {
+                    let payloads = resolve_list_chain::<Reference>(&[], [vp.clone()]);
+                    all_payloads.extend(payloads);
+                }
+            }
+        }
+    }
+    all_payloads
 }
 
 /// Resolves the specializes arc list for a prim across the layer stack.

@@ -554,7 +554,6 @@ fn basic_variant_with_reference_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires variant children population through inherits arcs"]
 fn tricky_variant_weaker_selection2_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("TrickyVariantWeakerSelection2_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
@@ -569,7 +568,6 @@ fn tricky_variant_weaker_selection3_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires variant children ordering refinement"]
 fn tricky_variant_weaker_selection4_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("TrickyVariantWeakerSelection4_root");
     assert_layer_stack_matches(&loaded, &pcp_path);

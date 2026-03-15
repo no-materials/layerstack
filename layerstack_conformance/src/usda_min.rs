@@ -1747,41 +1747,42 @@ fn load_layer_with_prims(
         }
     }
 
-    // For variant-scoped PrimDefs that overlap with non-variant definitions,
-    // route their composition arcs to the parent's VariantSpec.
+    // For variant-scoped PrimDefs, always route their composition arcs to
+    // the parent's VariantSpec. This ensures the correct variant's arcs are
+    // used based on the selected variant (prevents last-branch-wins overwrite
+    // when multiple branches define the same child path).
     let mut variant_only_defs: Vec<(layerstack::PathId, PrimDef)> = Vec::new();
     for (prim_path, prim) in variant_defs {
         let has_non_variant_counterpart = non_variant_paths.contains(&prim.path);
+        let (parent_path, set, branch) = prim.variant_parent.as_ref().unwrap();
+        let child_name = prim.path.rsplit('/').next().unwrap_or("").to_string();
+        let has_arcs = !prim.references.prepend.is_empty()
+            || !prim.references.append.is_empty()
+            || prim.references.explicit.is_some()
+            || !prim.inherits.prepend.is_empty()
+            || !prim.inherits.append.is_empty()
+            || prim.inherits.explicit.is_some()
+            || !prim.specializes.prepend.is_empty()
+            || !prim.specializes.append.is_empty()
+            || prim.specializes.explicit.is_some()
+            || !prim.payloads.prepend.is_empty()
+            || !prim.payloads.append.is_empty()
+            || prim.payloads.explicit.is_some();
+        if has_arcs {
+            variant_child_arcs_by_parent
+                .entry(parent_path.clone())
+                .or_default()
+                .push(VariantChildArc {
+                    set_name: set.clone(),
+                    branch_name: branch.clone(),
+                    child_name: child_name.clone(),
+                    references: prim.references.clone(),
+                    inherits: prim.inherits.clone(),
+                    specializes: prim.specializes.clone(),
+                    payloads: prim.payloads.clone(),
+                });
+        }
         if has_non_variant_counterpart {
-            // Route composition arcs to parent's VariantSpec.
-            let (parent_path, set, branch) = prim.variant_parent.as_ref().unwrap();
-            let child_name = prim.path.rsplit('/').next().unwrap_or("").to_string();
-            let has_arcs = !prim.references.prepend.is_empty()
-                || !prim.references.append.is_empty()
-                || prim.references.explicit.is_some()
-                || !prim.inherits.prepend.is_empty()
-                || !prim.inherits.append.is_empty()
-                || prim.inherits.explicit.is_some()
-                || !prim.specializes.prepend.is_empty()
-                || !prim.specializes.append.is_empty()
-                || prim.specializes.explicit.is_some()
-                || !prim.payloads.prepend.is_empty()
-                || !prim.payloads.append.is_empty()
-                || prim.payloads.explicit.is_some();
-            if has_arcs {
-                variant_child_arcs_by_parent
-                    .entry(parent_path.clone())
-                    .or_default()
-                    .push(VariantChildArc {
-                        set_name: set.clone(),
-                        branch_name: branch.clone(),
-                        child_name: child_name.clone(),
-                        references: prim.references,
-                        inherits: prim.inherits,
-                        specializes: prim.specializes,
-                        payloads: prim.payloads,
-                    });
-            }
             // Route variant-scoped fields to the parent's VariantSpec.child_fields.
             if !prim.attrs.is_empty() || !prim.time_samples.is_empty() {
                 variant_child_fields_by_parent
@@ -1792,6 +1793,8 @@ fn load_layer_with_prims(
             // Don't create a PrimSpec for this variant-scoped prim.
         } else {
             // New child introduced by variant — create PrimSpec normally.
+            // Arcs are also routed to parent's VariantSpec above for proper
+            // variant-selection-aware resolution.
             variant_only_defs.push((prim_path, prim));
         }
     }

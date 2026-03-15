@@ -15,8 +15,9 @@ use crate::{
     arcs::{
         resolve_direct_references_for_prim, resolve_inherits_for_prim,
         resolve_payloads_for_prim, resolve_references_for_prim,
-        resolve_specializes_for_prim, resolve_variant_branch_references,
-        resolve_variant_child_references, resolve_variant_selections_for_prim,
+        resolve_specializes_for_prim, resolve_variant_branch_payloads,
+        resolve_variant_branch_references, resolve_variant_child_references,
+        resolve_variant_selections_for_prim,
     },
     doc::{FieldValue, LayerId, LayerStore, Reference},
     interner::TokenId,
@@ -570,22 +571,30 @@ fn resolve_full_variant_selections(
     // Gather variant selections from within selected variant branches.
     // A stronger variant branch can provide selections for weaker variant sets.
     // Iterate until no new selections are discovered (handles chaining).
+    // Check variant sets from the prim itself AND from inherit targets,
+    // since variant sets can be inherited (e.g. a class defines the selector
+    // variant set while the inheriting prim authors the selection).
+    let inherits = resolve_inherits_for_prim(store, local_stack, path);
     loop {
         let mut new_selections = HashMap::new();
-        for layer_id in &local_stack.layers {
-            let Some(layer) = store.layer(*layer_id) else {
-                continue;
-            };
-            let Some(spec) = layer.prims.get(&path) else {
-                continue;
-            };
-            for (set, selected_variant) in &selections {
-                if let Some(set_spec) = spec.variant_sets.get(set)
-                    && let Some(variant_spec) = set_spec.variants.get(selected_variant)
-                {
-                    for (inner_set, inner_variant) in &variant_spec.variant_selections {
-                        if !selections.contains_key(inner_set) {
-                            new_selections.entry(*inner_set).or_insert(*inner_variant);
+        // Check specs for the prim path and all inherit targets.
+        let check_paths = core::iter::once(path).chain(inherits.iter().copied());
+        for check_path in check_paths {
+            for layer_id in &local_stack.layers {
+                let Some(layer) = store.layer(*layer_id) else {
+                    continue;
+                };
+                let Some(spec) = layer.prims.get(&check_path) else {
+                    continue;
+                };
+                for (set, selected_variant) in &selections {
+                    if let Some(set_spec) = spec.variant_sets.get(set)
+                        && let Some(variant_spec) = set_spec.variants.get(selected_variant)
+                    {
+                        for (inner_set, inner_variant) in &variant_spec.variant_selections {
+                            if !selections.contains_key(inner_set) {
+                                new_selections.entry(*inner_set).or_insert(*inner_variant);
+                            }
                         }
                     }
                 }
@@ -828,7 +837,11 @@ fn add_reference_opinions(
     let mut visited_specializes: HashSet<(PathId, PathId)> = HashSet::new();
     for dest_root in paths.iter().copied() {
         let refs = resolve_references_for_prim(store, local_stack, dest_root);
-        for (arc_list_index, reference) in refs.into_iter().enumerate() {
+        // Also resolve variant child references with full selection chaining.
+        let variant_child_refs =
+            resolve_variant_child_references(store, local_stack, local_stack, dest_root);
+        let all_refs = refs.into_iter().chain(variant_child_refs);
+        for (arc_list_index, reference) in all_refs.enumerate() {
             let arc_list_index = u16::try_from(arc_list_index).unwrap_or(u16::MAX);
             let namespace_depth =
                 u16::try_from(store.paths().resolve(dest_root).depth()).unwrap_or(u16::MAX);
@@ -1954,7 +1967,15 @@ fn add_payload_opinions(
     let mut visited_specializes: HashSet<(PathId, PathId)> = HashSet::new();
     for dest_root in paths.iter().copied() {
         let payloads = resolve_payloads_for_prim(store, local_stack, dest_root);
-        for (arc_list_index, payload) in payloads.into_iter().enumerate() {
+        // Also resolve variant branch-level payloads.
+        let branch_payloads = resolve_variant_branch_payloads(
+            store,
+            local_stack,
+            local_stack,
+            dest_root,
+        );
+        let all_payloads = payloads.into_iter().chain(branch_payloads);
+        for (arc_list_index, payload) in all_payloads.enumerate() {
             let arc_list_index = u16::try_from(arc_list_index).unwrap_or(u16::MAX);
             let namespace_depth =
                 u16::try_from(store.paths().resolve(dest_root).depth()).unwrap_or(u16::MAX);

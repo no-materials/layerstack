@@ -11,8 +11,9 @@ use hashbrown::{HashMap, HashSet};
 
 use crate::{
     arcs::{
-        collect_all_variant_branch_references, collect_all_variant_child_references,
-        resolve_inherits_for_prim, resolve_payloads_for_prim, resolve_references_for_prim,
+        collect_all_variant_branch_payloads, collect_all_variant_branch_references,
+        collect_all_variant_child_references, resolve_inherits_for_prim,
+        resolve_payloads_for_prim, resolve_references_for_prim,
         resolve_specializes_for_prim,
     },
     doc::LayerStore,
@@ -122,6 +123,20 @@ fn gather_populated_paths(
         // Spec: AOUSD Core §10 (payloads arc, §5.1.22).
         let payloads = resolve_payloads_for_prim(store, local_stack, path);
         for payload in payloads {
+            expand_reference_paths(
+                store,
+                path,
+                payload,
+                &mut paths,
+                &mut queue,
+                &mut visited_refs,
+                &mut visited_inherits,
+            );
+        }
+
+        // Expand payloads from variant branch headers (all branches).
+        let branch_payloads = collect_all_variant_branch_payloads(store, local_stack, path);
+        for payload in branch_payloads {
             expand_reference_paths(
                 store,
                 path,
@@ -317,6 +332,50 @@ fn expand_reference_paths(
                 store,
                 dest_path_id,
                 nested,
+                paths,
+                queue,
+                visited,
+                visited_inherits,
+            );
+        }
+
+        // Expand variant branch-level references from ALL variant branches.
+        let branch_refs =
+            collect_all_variant_branch_references(store, &remote_stack, remote_path_id);
+        for nested in branch_refs {
+            expand_reference_paths(
+                store,
+                dest_path_id,
+                nested,
+                paths,
+                queue,
+                visited,
+                visited_inherits,
+            );
+        }
+
+        // Expand variant branch-level payloads from ALL variant branches.
+        let branch_payloads =
+            collect_all_variant_branch_payloads(store, &remote_stack, remote_path_id);
+        for nested in branch_payloads {
+            expand_reference_paths(
+                store,
+                dest_path_id,
+                nested,
+                paths,
+                queue,
+                visited,
+                visited_inherits,
+            );
+        }
+
+        // Expand direct payloads from the remote prim.
+        let payloads = resolve_payloads_for_prim(store, &remote_stack, remote_path_id);
+        for payload in payloads {
+            expand_reference_paths(
+                store,
+                dest_path_id,
+                payload,
                 paths,
                 queue,
                 visited,
