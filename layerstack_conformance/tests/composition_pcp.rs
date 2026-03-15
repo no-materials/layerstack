@@ -472,7 +472,7 @@ fn tricky_specializes_and_inherits_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires variant spec path notation in prim stacks"]
+#[ignore = "requires variant-qualified spec paths in prim stack opinion sources"]
 fn variant_specializes_and_reference_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("VariantSpecializesAndReference_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
@@ -608,7 +608,7 @@ fn tricky_inherits_in_variants2_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires variant property stack notation"]
+#[ignore = "requires variant-qualified spec paths in prim stack opinion sources"]
 fn specializes_and_variants_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("SpecializesAndVariants_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
