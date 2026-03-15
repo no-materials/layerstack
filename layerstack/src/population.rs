@@ -12,9 +12,8 @@ use hashbrown::{HashMap, HashSet};
 use crate::{
     arcs::{
         collect_all_variant_branch_payloads, collect_all_variant_branch_references,
-        collect_all_variant_child_references, resolve_inherits_for_prim,
-        resolve_payloads_for_prim, resolve_references_for_prim,
-        resolve_specializes_for_prim,
+        collect_all_variant_child_references, resolve_inherits_for_prim, resolve_payloads_for_prim,
+        resolve_references_for_prim, resolve_specializes_for_prim,
     },
     doc::LayerStore,
     doc::{LayerId, Reference},

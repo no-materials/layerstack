@@ -22,6 +22,7 @@ pub use hashbrown::{HashMap, HashSet};
 
 pub mod arcs;
 pub mod compose;
+pub mod dependency_map;
 pub mod doc;
 pub mod interner;
 pub mod layer_stack;
@@ -31,6 +32,7 @@ pub mod population;
 pub mod prim_index;
 pub mod stage;
 
+pub use dependency_map::DependencyMap;
 pub use doc::{
     FieldValue, InMemoryStore, InterpolationType, Layer, LayerId, PrimSpec, Reference, Specifier,
     Value, VariantSetSpec, VariantSpec,

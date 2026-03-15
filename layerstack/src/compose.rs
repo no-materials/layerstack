@@ -13,12 +13,12 @@ use hashbrown::{HashMap, HashSet};
 
 use crate::{
     arcs::{
-        resolve_direct_references_for_prim, resolve_inherits_for_prim,
-        resolve_payloads_for_prim, resolve_references_for_prim,
-        resolve_specializes_for_prim, resolve_variant_branch_payloads,
+        resolve_direct_references_for_prim, resolve_inherits_for_prim, resolve_payloads_for_prim,
+        resolve_references_for_prim, resolve_specializes_for_prim, resolve_variant_branch_payloads,
         resolve_variant_branch_references, resolve_variant_child_references,
         resolve_variant_selections_for_prim,
     },
+    dependency_map::{ArcDependency, DependencyMapBuilder, LayerDependency},
     doc::{FieldValue, LayerId, LayerStore, Reference},
     interner::TokenId,
     layer_stack::LayerStack,
@@ -48,6 +48,12 @@ pub fn compose_stage(store: &mut dyn LayerStore, root: LayerId, options: StageOp
     let mut authored_children_opinions: HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>> =
         HashMap::new();
 
+    let mut dep_builder = if options.with_dependencies {
+        Some(DependencyMapBuilder::new())
+    } else {
+        None
+    };
+
     add_local_and_variant_opinions(
         store,
         &layer_stack,
@@ -55,6 +61,7 @@ pub fn compose_stage(store: &mut dyn LayerStore, root: LayerId, options: StageOp
         &mut prims,
         &mut prim_order_opinions,
         &mut authored_children_opinions,
+        dep_builder.as_mut(),
     );
     add_inherit_opinions(
         store,
@@ -63,6 +70,7 @@ pub fn compose_stage(store: &mut dyn LayerStore, root: LayerId, options: StageOp
         &mut prims,
         &mut prim_order_opinions,
         &mut authored_children_opinions,
+        dep_builder.as_mut(),
     );
     add_reference_opinions(
         store,
@@ -71,6 +79,7 @@ pub fn compose_stage(store: &mut dyn LayerStore, root: LayerId, options: StageOp
         &mut prims,
         &mut prim_order_opinions,
         &mut authored_children_opinions,
+        dep_builder.as_mut(),
     );
     add_payload_opinions(
         store,
@@ -79,6 +88,7 @@ pub fn compose_stage(store: &mut dyn LayerStore, root: LayerId, options: StageOp
         &mut prims,
         &mut prim_order_opinions,
         &mut authored_children_opinions,
+        dep_builder.as_mut(),
     );
     add_specializes_opinions(
         store,
@@ -87,6 +97,7 @@ pub fn compose_stage(store: &mut dyn LayerStore, root: LayerId, options: StageOp
         &mut prims,
         &mut prim_order_opinions,
         &mut authored_children_opinions,
+        dep_builder.as_mut(),
     );
 
     for prim in prims.values_mut() {
@@ -102,7 +113,8 @@ pub fn compose_stage(store: &mut dyn LayerStore, root: LayerId, options: StageOp
 
     filter_variant_children(store, &prims, &mut children);
 
-    Stage::from_parts(prims, children, options.with_provenance)
+    let dependencies = dep_builder.map(DependencyMapBuilder::finish);
+    Stage::from_parts(prims, children, options.with_provenance, dependencies)
 }
 
 /// Filters children maps by removing variant-only children that don't belong
@@ -198,8 +210,7 @@ fn filter_variant_children(
                                 .required_outer_selections
                                 .get(child)
                                 .map_or(true, |reqs| {
-                                    reqs.iter()
-                                        .all(|(s, v)| selections.get(s) == Some(v))
+                                    reqs.iter().all(|(s, v)| selections.get(s) == Some(v))
                                 });
                             if outer_ok {
                                 selected_children.insert(*child);
@@ -389,8 +400,7 @@ fn filter_variant_children(
             continue;
         }
 
-        let unselected_gc: HashSet<TokenId> =
-            all_gc.difference(&selected_gc).copied().collect();
+        let unselected_gc: HashSet<TokenId> = all_gc.difference(&selected_gc).copied().collect();
         if unselected_gc.is_empty() {
             continue;
         }
@@ -482,9 +492,7 @@ fn filter_variant_children(
                             if let Some(sc_id) = src_child_id {
                                 // Source namespace has this path, but it's not in
                                 // source's filtered children → it was filtered out.
-                                if !src_leaves.contains(&leaf)
-                                    && prims.contains_key(&sc_id)
-                                {
+                                if !src_leaves.contains(&leaf) && prims.contains_key(&sc_id) {
                                     to_remove.insert(leaf);
                                 }
                             }
@@ -530,7 +538,8 @@ fn filter_variant_children(
                 // ordering correctly.
                 let has_direct_only = child_list.iter().any(|child| {
                     let leaf = store.paths().resolve(*child).leaf();
-                    leaf.map(|l| !inherited_leaves.contains(&l)).unwrap_or(false)
+                    leaf.map(|l| !inherited_leaves.contains(&l))
+                        .unwrap_or(false)
                 });
 
                 if has_direct_only {
@@ -544,10 +553,8 @@ fn filter_variant_children(
                     inherited.sort_by(|a, b| {
                         let a_leaf = store.paths().resolve(*a).leaf();
                         let b_leaf = store.paths().resolve(*b).leaf();
-                        let a_pos = a_leaf
-                            .and_then(|l| src_order.iter().position(|s| *s == l));
-                        let b_pos = b_leaf
-                            .and_then(|l| src_order.iter().position(|s| *s == l));
+                        let a_pos = a_leaf.and_then(|l| src_order.iter().position(|s| *s == l));
+                        let b_pos = b_leaf.and_then(|l| src_order.iter().position(|s| *s == l));
                         a_pos.cmp(&b_pos)
                     });
 
@@ -678,6 +685,7 @@ fn add_local_and_variant_opinions(
     out: &mut HashMap<PathId, PrimIndex>,
     prim_order_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
     authored_children_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+    mut deps: Option<&mut DependencyMapBuilder>,
 ) {
     for path in paths.iter().copied() {
         let selections = resolve_full_variant_selections(store, local_stack, path);
@@ -691,6 +699,13 @@ fn add_local_and_variant_opinions(
             let Some(spec) = layer.prims.get(&path) else {
                 continue;
             };
+
+            if let Some(d) = deps.as_deref_mut() {
+                d.add_layer_opinion(LayerDependency {
+                    layer: layer_id,
+                    prim: path,
+                });
+            }
 
             let layer_strength = u16::try_from(layer_strength).unwrap_or(u16::MAX);
             out.get_mut(&path)
@@ -809,10 +824,9 @@ fn add_local_and_variant_opinions(
                     let child_path = path_obj.join(&[*child_tok]);
                     if let Some(child_path_id) = store.paths().lookup(&child_path) {
                         if out.contains_key(&child_path_id) {
-                            let child_ns_depth = u16::try_from(
-                                store.paths().resolve(child_path_id).depth(),
-                            )
-                            .unwrap_or(u16::MAX);
+                            let child_ns_depth =
+                                u16::try_from(store.paths().resolve(child_path_id).depth())
+                                    .unwrap_or(u16::MAX);
                             for (field, value) in child_fields {
                                 out.get_mut(&child_path_id)
                                     .expect("path exists")
@@ -855,10 +869,9 @@ fn add_local_and_variant_opinions(
                     let child_path = path_obj.join(&[*child_tok]);
                     if let Some(child_path_id) = store.paths().lookup(&child_path) {
                         if out.contains_key(&child_path_id) {
-                            let child_ns_depth = u16::try_from(
-                                store.paths().resolve(child_path_id).depth(),
-                            )
-                            .unwrap_or(u16::MAX);
+                            let child_ns_depth =
+                                u16::try_from(store.paths().resolve(child_path_id).depth())
+                                    .unwrap_or(u16::MAX);
                             authored_children_out
                                 .entry(child_path_id)
                                 .or_default()
@@ -891,6 +904,7 @@ fn add_reference_opinions(
     out: &mut HashMap<PathId, PrimIndex>,
     prim_order_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
     authored_children_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+    mut deps: Option<&mut DependencyMapBuilder>,
 ) {
     // Spec: AOUSD Core §10 (references arcs). For v0.1 we expand references
     // recursively so that nested references contribute opinions.
@@ -907,6 +921,14 @@ fn add_reference_opinions(
             let arc_list_index = u16::try_from(arc_list_index).unwrap_or(u16::MAX);
             let namespace_depth =
                 u16::try_from(store.paths().resolve(dest_root).depth()).unwrap_or(u16::MAX);
+            if let Some(d) = deps.as_deref_mut() {
+                d.add_arc(ArcDependency {
+                    source: reference.prim_path,
+                    target: dest_root,
+                    arc_kind: ArcKind::References,
+                    layer: reference.layer,
+                });
+            }
             add_reference_edge_opinions(
                 store,
                 local_stack,
@@ -920,6 +942,7 @@ fn add_reference_opinions(
                 &mut visited_specializes,
                 prim_order_out,
                 authored_children_out,
+                deps.as_deref_mut(),
             );
         }
     }
@@ -932,6 +955,7 @@ fn add_inherit_opinions(
     out: &mut HashMap<PathId, PrimIndex>,
     prim_order_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
     authored_children_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+    mut deps: Option<&mut DependencyMapBuilder>,
 ) {
     // Spec: AOUSD Core §10 (inherits arc).
     let mut visited: HashSet<(PathId, PathId)> = HashSet::new();
@@ -943,6 +967,14 @@ fn add_inherit_opinions(
             let arc_list_index = u16::try_from(arc_list_index).unwrap_or(u16::MAX);
             let namespace_depth =
                 u16::try_from(store.paths().resolve(dest_root).depth()).unwrap_or(u16::MAX);
+            if let Some(d) = deps.as_deref_mut() {
+                d.add_arc(ArcDependency {
+                    source: inherited_root,
+                    target: dest_root,
+                    arc_kind: ArcKind::Inherits,
+                    layer: local_stack.layers[0],
+                });
+            }
             add_inherit_edge_opinions(
                 store,
                 local_stack,
@@ -958,6 +990,7 @@ fn add_inherit_opinions(
                 prim_order_out,
                 authored_children_out,
                 None,
+                deps.as_deref_mut(),
             );
         }
     }
@@ -979,6 +1012,7 @@ fn add_inherit_edge_opinions(
     authored_children_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
     // Optional reference namespace for remapping field values (dest, src).
     ref_remap: Option<(&crate::path::Path, &crate::path::Path)>,
+    mut deps: Option<&mut DependencyMapBuilder>,
 ) {
     if !visited.insert((dest_root, inherited_root)) {
         return;
@@ -1034,6 +1068,12 @@ fn add_inherit_edge_opinions(
                 let Some(spec) = layer.prims.get(remote_path_id) else {
                     continue;
                 };
+                if let Some(d) = deps.as_deref_mut() {
+                    d.add_layer_opinion(LayerDependency {
+                        layer: layer_id,
+                        prim: *dest_path_id,
+                    });
+                }
                 if let Some(order) = &spec.prim_order {
                     prim_order_out.entry(*dest_path_id).or_default().push((
                         OpinionKey {
@@ -1097,12 +1137,7 @@ fn add_inherit_edge_opinions(
                         && let Some(variant_spec) = set_spec.variants.get(selected)
                     {
                         for (field, value) in &variant_spec.fields {
-                            pending.push((
-                                *dest_path_id,
-                                *remote_path_id,
-                                *field,
-                                value.clone(),
-                            ));
+                            pending.push((*dest_path_id, *remote_path_id, *field, value.clone()));
                         }
                     }
                 }
@@ -1116,16 +1151,14 @@ fn add_inherit_edge_opinions(
                     if let Some(remote_parent) = remote_path.parent() {
                         if let Some(remote_parent_id) = store.paths().lookup(&remote_parent) {
                             if let Some(parent_spec) = layer.prims.get(&remote_parent_id) {
-                                let parent_selections =
-                                    resolve_variant_selections_for_prim(
-                                        store,
-                                        local_stack,
-                                        remote_parent_id,
-                                    );
+                                let parent_selections = resolve_variant_selections_for_prim(
+                                    store,
+                                    local_stack,
+                                    remote_parent_id,
+                                );
                                 for (set, selected) in &parent_selections {
                                     if let Some(set_spec) = parent_spec.variant_sets.get(set)
-                                        && let Some(variant_spec) =
-                                            set_spec.variants.get(selected)
+                                        && let Some(variant_spec) = set_spec.variants.get(selected)
                                         && let Some(child_fields) =
                                             variant_spec.child_fields.get(&remote_leaf)
                                     {
@@ -1268,6 +1301,7 @@ fn add_inherit_edge_opinions(
                     prim_order_out,
                     authored_children_out,
                     ref_remap,
+                    deps.as_deref_mut(),
                 );
             }
 
@@ -1301,6 +1335,7 @@ fn add_inherit_edge_opinions(
                         prim_order_out,
                         authored_children_out,
                         ref_remap,
+                        deps.as_deref_mut(),
                     );
                 }
             }
@@ -1319,6 +1354,7 @@ fn add_inherit_edge_opinions(
                 prim_order_out,
                 authored_children_out,
                 ref_remap,
+                deps.as_deref_mut(),
             );
         }
 
@@ -1330,15 +1366,13 @@ fn add_inherit_edge_opinions(
         // namespace including its specializes.
         //
         // Spec: AOUSD Core §10 (LIVERPS composition ordering).
-        let nested_specializes =
-            resolve_specializes_for_prim(store, local_stack, remote_path_id);
+        let nested_specializes = resolve_specializes_for_prim(store, local_stack, remote_path_id);
         for (spec_index, specialized) in nested_specializes.into_iter().enumerate() {
             let spec_index = u16::try_from(spec_index).unwrap_or(u16::MAX);
             let namespace_depth =
                 u16::try_from(store.paths().resolve(dest_path_id).depth()).unwrap_or(u16::MAX);
 
-            let translated =
-                remap_path_id(store, &base_path, &inherited_path, specialized);
+            let translated = remap_path_id(store, &base_path, &inherited_path, specialized);
             if translated != specialized {
                 add_specializes_edge_opinions(
                     store,
@@ -1352,6 +1386,7 @@ fn add_inherit_edge_opinions(
                     visited_specializes,
                     prim_order_out,
                     authored_children_out,
+                    deps.as_deref_mut(),
                 );
             }
 
@@ -1373,6 +1408,7 @@ fn add_inherit_edge_opinions(
                         visited_specializes,
                         prim_order_out,
                         authored_children_out,
+                        deps.as_deref_mut(),
                     );
                 }
             }
@@ -1389,6 +1425,7 @@ fn add_inherit_edge_opinions(
                 visited_specializes,
                 prim_order_out,
                 authored_children_out,
+                deps.as_deref_mut(),
             );
         }
 
@@ -1417,6 +1454,7 @@ fn add_inherit_edge_opinions(
                 visited_specializes,
                 prim_order_out,
                 authored_children_out,
+                deps.as_deref_mut(),
             );
         }
     }
@@ -1581,6 +1619,7 @@ fn add_reference_edge_opinions(
     visited_specializes: &mut HashSet<(PathId, PathId)>,
     prim_order_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
     authored_children_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+    mut deps: Option<&mut DependencyMapBuilder>,
 ) {
     if !out.contains_key(&dest_root) {
         return;
@@ -1642,6 +1681,12 @@ fn add_reference_edge_opinions(
             let Some(remote_spec) = remote_layer.prims.get(remote_path_id) else {
                 continue;
             };
+            if let Some(d) = deps.as_deref_mut() {
+                d.add_layer_opinion(LayerDependency {
+                    layer: remote_layer_id,
+                    prim: *dest_path_id,
+                });
+            }
             let base_key = OpinionKey {
                 is_local: false,
                 arc_kind: ArcKind::References,
@@ -1656,12 +1701,7 @@ fn add_reference_edge_opinions(
             pending_sources.push((*dest_path_id, base_key.clone()));
 
             for (field, value) in &remote_spec.fields {
-                pending_fields.push((
-                    *dest_path_id,
-                    *field,
-                    base_key.clone(),
-                    value.clone(),
-                ));
+                pending_fields.push((*dest_path_id, *field, base_key.clone(), value.clone()));
             }
 
             // Forward variant opinions from selected variants.
@@ -1700,10 +1740,9 @@ fn add_reference_edge_opinions(
                             let child_path = ref_path_obj.join(&[*child_tok]);
                             if let Some(child_path_id) = store.paths().lookup(&child_path) {
                                 if out.contains_key(&child_path_id) {
-                                    let child_ns = u16::try_from(
-                                        store.paths().resolve(child_path_id).depth(),
-                                    )
-                                    .unwrap_or(u16::MAX);
+                                    let child_ns =
+                                        u16::try_from(store.paths().resolve(child_path_id).depth())
+                                            .unwrap_or(u16::MAX);
                                     authored_children_out
                                         .entry(child_path_id)
                                         .or_default()
@@ -1730,10 +1769,9 @@ fn add_reference_edge_opinions(
                             let child_path = ref_path_obj.join(&[*child_tok]);
                             if let Some(child_path_id) = store.paths().lookup(&child_path) {
                                 if out.contains_key(&child_path_id) {
-                                    let child_ns = u16::try_from(
-                                        store.paths().resolve(child_path_id).depth(),
-                                    )
-                                    .unwrap_or(u16::MAX);
+                                    let child_ns =
+                                        u16::try_from(store.paths().resolve(child_path_id).depth())
+                                            .unwrap_or(u16::MAX);
                                     for (field, value) in child_fields {
                                         pending_fields.push((
                                             child_path_id,
@@ -1819,11 +1857,7 @@ fn add_reference_edge_opinions(
             let value = remap_field_value_paths(store, &dest_root_path, &target_root, value);
             out.get_mut(&dest_path_id)
                 .expect("path exists")
-                .add_opinion(Opinion {
-                    key,
-                    field,
-                    value,
-                });
+                .add_opinion(Opinion { key, field, value });
         }
     }
 
@@ -1858,6 +1892,7 @@ fn add_reference_edge_opinions(
                     prim_order_out,
                     authored_children_out,
                     ref_remap,
+                    deps.as_deref_mut(),
                 );
             }
 
@@ -1876,6 +1911,7 @@ fn add_reference_edge_opinions(
                 prim_order_out,
                 authored_children_out,
                 ref_remap,
+                deps.as_deref_mut(),
             );
         }
 
@@ -1885,12 +1921,8 @@ fn add_reference_edge_opinions(
         // Also resolve variant-scoped child references using combined_stack
         // for selections, so referencing layer's variant selections override
         // the referenced layer's defaults.
-        let variant_child_refs = resolve_variant_child_references(
-            store,
-            &remote_stack,
-            &combined_stack,
-            remote_path_id,
-        );
+        let variant_child_refs =
+            resolve_variant_child_references(store, &remote_stack, &combined_stack, remote_path_id);
         // Also resolve variant branch-level references (arcs on the variant
         // branch header itself, e.g. `"full" (add references = ...) {}`).
         let variant_branch_refs = resolve_variant_branch_references(
@@ -1920,6 +1952,7 @@ fn add_reference_edge_opinions(
                 visited_specializes,
                 prim_order_out,
                 authored_children_out,
+                deps.as_deref_mut(),
             );
         }
 
@@ -1942,6 +1975,7 @@ fn add_reference_edge_opinions(
                 visited_specializes,
                 prim_order_out,
                 authored_children_out,
+                deps.as_deref_mut(),
             );
         }
 
@@ -1956,8 +1990,7 @@ fn add_reference_edge_opinions(
             let namespace_depth =
                 u16::try_from(store.paths().resolve(dest_path_id).depth()).unwrap_or(u16::MAX);
 
-            let translated =
-                remap_path_id(store, &dest_root_path, &target_root, specialized_root);
+            let translated = remap_path_id(store, &dest_root_path, &target_root, specialized_root);
             if translated != specialized_root {
                 add_specializes_edge_opinions(
                     store,
@@ -1971,6 +2004,7 @@ fn add_reference_edge_opinions(
                     visited_specializes,
                     prim_order_out,
                     authored_children_out,
+                    deps.as_deref_mut(),
                 );
             }
 
@@ -1986,6 +2020,7 @@ fn add_reference_edge_opinions(
                 visited_specializes,
                 prim_order_out,
                 authored_children_out,
+                deps.as_deref_mut(),
             );
         }
     }
@@ -2020,6 +2055,7 @@ fn add_payload_opinions(
     out: &mut HashMap<PathId, PrimIndex>,
     prim_order_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
     authored_children_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+    mut deps: Option<&mut DependencyMapBuilder>,
 ) {
     // Spec: AOUSD Core §10 (payloads arc, §5.1.22). Payloads are structurally
     // identical to references for composition purposes but sit at a weaker
@@ -2030,17 +2066,21 @@ fn add_payload_opinions(
     for dest_root in paths.iter().copied() {
         let payloads = resolve_payloads_for_prim(store, local_stack, dest_root);
         // Also resolve variant branch-level payloads.
-        let branch_payloads = resolve_variant_branch_payloads(
-            store,
-            local_stack,
-            local_stack,
-            dest_root,
-        );
+        let branch_payloads =
+            resolve_variant_branch_payloads(store, local_stack, local_stack, dest_root);
         let all_payloads = payloads.into_iter().chain(branch_payloads);
         for (arc_list_index, payload) in all_payloads.enumerate() {
             let arc_list_index = u16::try_from(arc_list_index).unwrap_or(u16::MAX);
             let namespace_depth =
                 u16::try_from(store.paths().resolve(dest_root).depth()).unwrap_or(u16::MAX);
+            if let Some(d) = deps.as_deref_mut() {
+                d.add_arc(ArcDependency {
+                    source: payload.prim_path,
+                    target: dest_root,
+                    arc_kind: ArcKind::Payloads,
+                    layer: payload.layer,
+                });
+            }
             add_payload_edge_opinions(
                 store,
                 local_stack,
@@ -2054,6 +2094,7 @@ fn add_payload_opinions(
                 &mut visited_specializes,
                 prim_order_out,
                 authored_children_out,
+                deps.as_deref_mut(),
             );
         }
     }
@@ -2072,6 +2113,7 @@ fn add_payload_edge_opinions(
     visited_specializes: &mut HashSet<(PathId, PathId)>,
     prim_order_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
     authored_children_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+    mut deps: Option<&mut DependencyMapBuilder>,
 ) {
     // Payloads mirror reference edge opinions with ArcKind::Payloads.
     if !out.contains_key(&dest_root) {
@@ -2133,6 +2175,12 @@ fn add_payload_edge_opinions(
             let Some(remote_spec) = remote_layer.prims.get(remote_path_id) else {
                 continue;
             };
+            if let Some(d) = deps.as_deref_mut() {
+                d.add_layer_opinion(LayerDependency {
+                    layer: remote_layer_id,
+                    prim: *dest_path_id,
+                });
+            }
             pending_sources.push((
                 *dest_path_id,
                 OpinionKey {
@@ -2239,6 +2287,7 @@ fn add_payload_edge_opinions(
                     prim_order_out,
                     authored_children_out,
                     ref_remap,
+                    deps.as_deref_mut(),
                 );
             }
 
@@ -2257,6 +2306,7 @@ fn add_payload_edge_opinions(
                 prim_order_out,
                 authored_children_out,
                 ref_remap,
+                deps.as_deref_mut(),
             );
         }
 
@@ -2280,6 +2330,7 @@ fn add_payload_edge_opinions(
                 visited_specializes,
                 prim_order_out,
                 authored_children_out,
+                deps.as_deref_mut(),
             );
         }
 
@@ -2302,6 +2353,7 @@ fn add_payload_edge_opinions(
                 visited_specializes,
                 prim_order_out,
                 authored_children_out,
+                deps.as_deref_mut(),
             );
         }
 
@@ -2312,8 +2364,7 @@ fn add_payload_edge_opinions(
             let namespace_depth =
                 u16::try_from(store.paths().resolve(dest_path_id).depth()).unwrap_or(u16::MAX);
 
-            let translated =
-                remap_path_id(store, &dest_root_path, &target_root, specialized_root);
+            let translated = remap_path_id(store, &dest_root_path, &target_root, specialized_root);
             if translated != specialized_root {
                 add_specializes_edge_opinions(
                     store,
@@ -2327,6 +2378,7 @@ fn add_payload_edge_opinions(
                     visited_specializes,
                     prim_order_out,
                     authored_children_out,
+                    deps.as_deref_mut(),
                 );
             }
 
@@ -2342,6 +2394,7 @@ fn add_payload_edge_opinions(
                 visited_specializes,
                 prim_order_out,
                 authored_children_out,
+                deps.as_deref_mut(),
             );
         }
     }
@@ -2354,6 +2407,7 @@ fn add_specializes_opinions(
     out: &mut HashMap<PathId, PrimIndex>,
     prim_order_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
     authored_children_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+    mut deps: Option<&mut DependencyMapBuilder>,
 ) {
     // Spec: AOUSD Core §10 (specializes arc, §5.1.33). Specializes mirrors
     // inherits but sits at the weakest position in LIVERPS.
@@ -2364,6 +2418,14 @@ fn add_specializes_opinions(
             let arc_list_index = u16::try_from(arc_list_index).unwrap_or(u16::MAX);
             let namespace_depth =
                 u16::try_from(store.paths().resolve(dest_root).depth()).unwrap_or(u16::MAX);
+            if let Some(d) = deps.as_deref_mut() {
+                d.add_arc(ArcDependency {
+                    source: specialized_root,
+                    target: dest_root,
+                    arc_kind: ArcKind::Specializes,
+                    layer: local_stack.layers[0],
+                });
+            }
             add_specializes_edge_opinions(
                 store,
                 local_stack,
@@ -2376,6 +2438,7 @@ fn add_specializes_opinions(
                 &mut visited,
                 prim_order_out,
                 authored_children_out,
+                deps.as_deref_mut(),
             );
         }
     }
@@ -2394,6 +2457,7 @@ fn add_specializes_edge_opinions(
     visited: &mut HashSet<(PathId, PathId)>,
     prim_order_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
     authored_children_out: &mut HashMap<PathId, Vec<(OpinionKey, Vec<TokenId>)>>,
+    mut deps: Option<&mut DependencyMapBuilder>,
 ) {
     if !visited.insert((dest_root, specialized_root)) {
         return;
@@ -2449,6 +2513,12 @@ fn add_specializes_edge_opinions(
                 let Some(spec) = layer.prims.get(remote_path_id) else {
                     continue;
                 };
+                if let Some(d) = deps.as_deref_mut() {
+                    d.add_layer_opinion(LayerDependency {
+                        layer: layer_id,
+                        prim: *dest_path_id,
+                    });
+                }
                 if let Some(order) = &spec.prim_order {
                     prim_order_out.entry(*dest_path_id).or_default().push((
                         OpinionKey {
@@ -2512,12 +2582,7 @@ fn add_specializes_edge_opinions(
                         && let Some(variant_spec) = set_spec.variants.get(selected)
                     {
                         for (field, value) in &variant_spec.fields {
-                            pending.push((
-                                *dest_path_id,
-                                *remote_path_id,
-                                *field,
-                                value.clone(),
-                            ));
+                            pending.push((*dest_path_id, *remote_path_id, *field, value.clone()));
                         }
                     }
                 }
@@ -2624,6 +2689,7 @@ fn add_specializes_edge_opinions(
                     visited,
                     prim_order_out,
                     authored_children_out,
+                    deps.as_deref_mut(),
                 );
             }
 
@@ -2646,6 +2712,7 @@ fn add_specializes_edge_opinions(
                         visited,
                         prim_order_out,
                         authored_children_out,
+                        deps.as_deref_mut(),
                     );
                 }
             }
@@ -2662,6 +2729,7 @@ fn add_specializes_edge_opinions(
                 visited,
                 prim_order_out,
                 authored_children_out,
+                deps.as_deref_mut(),
             );
         }
     }
@@ -2695,6 +2763,7 @@ fn add_specializes_edge_opinions(
                     visited,
                     prim_order_out,
                     authored_children_out,
+                    deps.as_deref_mut(),
                 );
             }
 
@@ -2721,6 +2790,7 @@ fn add_specializes_edge_opinions(
                         visited,
                         prim_order_out,
                         authored_children_out,
+                        deps.as_deref_mut(),
                     );
                 }
             }
@@ -2737,6 +2807,7 @@ fn add_specializes_edge_opinions(
                 visited,
                 prim_order_out,
                 authored_children_out,
+                deps.as_deref_mut(),
             );
         }
     }
@@ -2771,6 +2842,7 @@ fn add_specializes_edge_opinions(
                 visited,
                 prim_order_out,
                 authored_children_out,
+                deps.as_deref_mut(),
             );
         }
     }

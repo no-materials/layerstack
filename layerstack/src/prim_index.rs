@@ -18,7 +18,7 @@ use crate::{
 };
 
 /// Composition arc kind (LIVERPS ordering).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ArcKind {
     /// Local opinions from the layer stack.
     Local,

@@ -3,7 +3,7 @@
 use layerstack::HashMap;
 
 use layerstack::{
-    FieldValue, Layer, LayerId, ListOp, Path, PrimSpec, Reference, ResolvedValue, Stage,
+    ArcKind, FieldValue, Layer, LayerId, ListOp, Path, PrimSpec, Reference, ResolvedValue, Stage,
     StageOptions, Value, VariantSetSpec, VariantSpec, doc::InMemoryStore,
 };
 
@@ -140,15 +140,23 @@ fn variants_selection_is_strength_ordered() {
     let mut set_spec = VariantSetSpec::default();
     let mut fields_a = HashMap::new();
     fields_a.insert(field_x, FieldValue::Value(Value::Int(1)));
-    set_spec
-        .variants
-        .insert(variant_a, VariantSpec { fields: fields_a, ..Default::default() });
+    set_spec.variants.insert(
+        variant_a,
+        VariantSpec {
+            fields: fields_a,
+            ..Default::default()
+        },
+    );
 
     let mut fields_b = HashMap::new();
     fields_b.insert(field_x, FieldValue::Value(Value::Int(2)));
-    set_spec
-        .variants
-        .insert(variant_b, VariantSpec { fields: fields_b, ..Default::default() });
+    set_spec.variants.insert(
+        variant_b,
+        VariantSpec {
+            fields: fields_b,
+            ..Default::default()
+        },
+    );
 
     sub_spec.variant_sets.insert(set_v, set_spec);
     sub_layer.prims.insert(prim, sub_spec);
@@ -568,10 +576,7 @@ fn specifier_resolution_follows_strongest_defining() {
     let stage = Stage::compose(&mut store, LayerId(1), StageOptions::default());
 
     // Strongest defining opinion is def from layer 2.
-    assert_eq!(
-        stage.resolve_specifier(prim, &store),
-        Some(Specifier::Def)
-    );
+    assert_eq!(stage.resolve_specifier(prim, &store), Some(Specifier::Def));
     assert!(stage.is_defined(prim, &store));
     assert!(!stage.is_abstract(prim, &store));
 }
@@ -613,10 +618,7 @@ fn specifier_all_over_is_undefining() {
 
     let stage = Stage::compose(&mut store, LayerId(1), StageOptions::default());
 
-    assert_eq!(
-        stage.resolve_specifier(prim, &store),
-        Some(Specifier::Over)
-    );
+    assert_eq!(stage.resolve_specifier(prim, &store), Some(Specifier::Over));
     assert!(!stage.is_defined(prim, &store));
 }
 
@@ -752,33 +754,51 @@ fn time_samples_held_interpolation() {
 
     // Exact samples.
     assert_eq!(
-        stage.resolve_value_at_time(p, field, 1.0, InterpolationType::Held).unwrap().value,
+        stage
+            .resolve_value_at_time(p, field, 1.0, InterpolationType::Held)
+            .unwrap()
+            .value,
         Value::Float(10.0)
     );
     assert_eq!(
-        stage.resolve_value_at_time(p, field, 3.0, InterpolationType::Held).unwrap().value,
+        stage
+            .resolve_value_at_time(p, field, 3.0, InterpolationType::Held)
+            .unwrap()
+            .value,
         Value::Float(30.0)
     );
 
     // Between samples: held returns earlier value.
     assert_eq!(
-        stage.resolve_value_at_time(p, field, 2.0, InterpolationType::Held).unwrap().value,
+        stage
+            .resolve_value_at_time(p, field, 2.0, InterpolationType::Held)
+            .unwrap()
+            .value,
         Value::Float(10.0)
     );
     assert_eq!(
-        stage.resolve_value_at_time(p, field, 4.0, InterpolationType::Held).unwrap().value,
+        stage
+            .resolve_value_at_time(p, field, 4.0, InterpolationType::Held)
+            .unwrap()
+            .value,
         Value::Float(30.0)
     );
 
     // Before first sample: return first value.
     assert_eq!(
-        stage.resolve_value_at_time(p, field, 0.0, InterpolationType::Held).unwrap().value,
+        stage
+            .resolve_value_at_time(p, field, 0.0, InterpolationType::Held)
+            .unwrap()
+            .value,
         Value::Float(10.0)
     );
 
     // After last sample: return last value.
     assert_eq!(
-        stage.resolve_value_at_time(p, field, 100.0, InterpolationType::Held).unwrap().value,
+        stage
+            .resolve_value_at_time(p, field, 100.0, InterpolationType::Held)
+            .unwrap()
+            .value,
         Value::Float(50.0)
     );
 }
@@ -799,10 +819,7 @@ fn time_samples_linear_interpolation() {
     let mut spec = PrimSpec::default();
     spec.fields.insert(
         field,
-        FieldValue::TimeSamples(vec![
-            (0.0, Value::Float(0.0)),
-            (10.0, Value::Float(100.0)),
-        ]),
+        FieldValue::TimeSamples(vec![(0.0, Value::Float(0.0)), (10.0, Value::Float(100.0))]),
     );
     layer.prims.insert(p, spec);
     store.insert_layer(layer);
@@ -811,29 +828,44 @@ fn time_samples_linear_interpolation() {
 
     // Midpoint: linear interpolation.
     assert_eq!(
-        stage.resolve_value_at_time(p, field, 5.0, InterpolationType::Linear).unwrap().value,
+        stage
+            .resolve_value_at_time(p, field, 5.0, InterpolationType::Linear)
+            .unwrap()
+            .value,
         Value::Float(50.0)
     );
 
     // Quarter point.
     assert_eq!(
-        stage.resolve_value_at_time(p, field, 2.5, InterpolationType::Linear).unwrap().value,
+        stage
+            .resolve_value_at_time(p, field, 2.5, InterpolationType::Linear)
+            .unwrap()
+            .value,
         Value::Float(25.0)
     );
 
     // Exact sample.
     assert_eq!(
-        stage.resolve_value_at_time(p, field, 0.0, InterpolationType::Linear).unwrap().value,
+        stage
+            .resolve_value_at_time(p, field, 0.0, InterpolationType::Linear)
+            .unwrap()
+            .value,
         Value::Float(0.0)
     );
 
     // Beyond range: clamp.
     assert_eq!(
-        stage.resolve_value_at_time(p, field, -1.0, InterpolationType::Linear).unwrap().value,
+        stage
+            .resolve_value_at_time(p, field, -1.0, InterpolationType::Linear)
+            .unwrap()
+            .value,
         Value::Float(0.0)
     );
     assert_eq!(
-        stage.resolve_value_at_time(p, field, 20.0, InterpolationType::Linear).unwrap().value,
+        stage
+            .resolve_value_at_time(p, field, 20.0, InterpolationType::Linear)
+            .unwrap()
+            .value,
         Value::Float(100.0)
     );
 }
@@ -854,10 +886,7 @@ fn time_samples_linear_int_interpolation() {
     let mut spec = PrimSpec::default();
     spec.fields.insert(
         field,
-        FieldValue::TimeSamples(vec![
-            (0.0, Value::Int(0)),
-            (10.0, Value::Int(100)),
-        ]),
+        FieldValue::TimeSamples(vec![(0.0, Value::Int(0)), (10.0, Value::Int(100))]),
     );
     layer.prims.insert(p, spec);
     store.insert_layer(layer);
@@ -866,7 +895,10 @@ fn time_samples_linear_int_interpolation() {
 
     // Midpoint: linear interpolation, rounded to nearest int.
     assert_eq!(
-        stage.resolve_value_at_time(p, field, 5.0, InterpolationType::Linear).unwrap().value,
+        stage
+            .resolve_value_at_time(p, field, 5.0, InterpolationType::Linear)
+            .unwrap()
+            .value,
         Value::Int(50)
     );
 }
@@ -899,7 +931,10 @@ fn time_samples_non_numeric_falls_back_to_held() {
 
     // Linear on non-numeric falls back to held (earlier value).
     assert_eq!(
-        stage.resolve_value_at_time(p, field, 3.0, InterpolationType::Linear).unwrap().value,
+        stage
+            .resolve_value_at_time(p, field, 3.0, InterpolationType::Linear)
+            .unwrap()
+            .value,
         Value::String("hello".into())
     );
 }
@@ -921,9 +956,7 @@ fn time_samples_override_default_value() {
     let mut root_spec = PrimSpec::default();
     root_spec.fields.insert(
         field,
-        FieldValue::TimeSamples(vec![
-            (1.0, Value::Float(10.0)),
-        ]),
+        FieldValue::TimeSamples(vec![(1.0, Value::Float(10.0))]),
     );
     root.prims.insert(p, root_spec);
     store.insert_layer(root);
@@ -935,7 +968,9 @@ fn time_samples_override_default_value() {
         prims: HashMap::new(),
     };
     let mut sub_spec = PrimSpec::default();
-    sub_spec.fields.insert(field, FieldValue::Value(Value::Float(999.0)));
+    sub_spec
+        .fields
+        .insert(field, FieldValue::Value(Value::Float(999.0)));
     sub.prims.insert(p, sub_spec);
     store.insert_layer(sub);
 
@@ -943,7 +978,10 @@ fn time_samples_override_default_value() {
 
     // TimeSamples from stronger layer takes priority.
     assert_eq!(
-        stage.resolve_value_at_time(p, field, 1.0, InterpolationType::Held).unwrap().value,
+        stage
+            .resolve_value_at_time(p, field, 1.0, InterpolationType::Held)
+            .unwrap()
+            .value,
         Value::Float(10.0)
     );
 
@@ -952,4 +990,222 @@ fn time_samples_override_default_value() {
     // which is TimeSamples, so it returns None. The weaker default is not reached.
     // For the default value, the user should use resolve_value_at_time.
     assert!(stage.resolve_value(p, field).is_none());
+}
+
+// ── Dependency map integration tests ───────────────────────────────────────
+
+#[test]
+fn dependency_map_none_by_default() {
+    let mut store = InMemoryStore::default();
+    let p = path(&mut store, "/P");
+
+    let mut layer = Layer {
+        id: LayerId(1),
+        sublayers: vec![],
+        prims: HashMap::new(),
+    };
+    layer.prims.insert(p, PrimSpec::default());
+    store.insert_layer(layer);
+
+    let stage = Stage::compose(&mut store, LayerId(1), StageOptions::default());
+    assert!(
+        stage.dependencies().is_none(),
+        "dependencies should be None when with_dependencies is false"
+    );
+}
+
+#[test]
+fn dependency_map_records_local_layer_opinions() {
+    let mut store = InMemoryStore::default();
+    let field_x = store.tokens.intern("x");
+    let p = path(&mut store, "/P");
+
+    let mut root = Layer {
+        id: LayerId(1),
+        sublayers: vec![LayerId(2)],
+        prims: HashMap::new(),
+    };
+    let mut spec = PrimSpec::default();
+    spec.fields
+        .insert(field_x, FieldValue::Value(Value::Int(1)));
+    root.prims.insert(p, spec);
+    store.insert_layer(root);
+
+    let mut sub = Layer {
+        id: LayerId(2),
+        sublayers: vec![],
+        prims: HashMap::new(),
+    };
+    let mut sub_spec = PrimSpec::default();
+    sub_spec
+        .fields
+        .insert(field_x, FieldValue::Value(Value::Int(2)));
+    sub.prims.insert(p, sub_spec);
+    store.insert_layer(sub);
+
+    let stage = Stage::compose(
+        &mut store,
+        LayerId(1),
+        StageOptions {
+            with_dependencies: true,
+            ..StageOptions::default()
+        },
+    );
+
+    let deps = stage.dependencies().expect("dependencies enabled");
+    assert!(!deps.is_empty());
+
+    // Both layers should be recorded as affecting prim P.
+    let layers = deps.layers_affecting_prim(p);
+    assert!(layers.contains(&LayerId(1)));
+    assert!(layers.contains(&LayerId(2)));
+
+    // P should appear in prims affected by both layers.
+    assert!(deps.prims_affected_by_layer(LayerId(1)).contains(&p));
+    assert!(deps.prims_affected_by_layer(LayerId(2)).contains(&p));
+
+    // No arc dependencies for local-only composition.
+    assert!(deps.arcs().is_empty());
+}
+
+#[test]
+fn dependency_map_records_reference_arc_and_layer() {
+    let mut store = InMemoryStore::default();
+    let field_x = store.tokens.intern("x");
+    let p = path(&mut store, "/P");
+    let q = path(&mut store, "/Q");
+
+    let mut root = Layer {
+        id: LayerId(1),
+        sublayers: vec![],
+        prims: HashMap::new(),
+    };
+    let mut p_spec = PrimSpec::default();
+    p_spec.references.append.push(Reference {
+        layer: LayerId(2),
+        prim_path: q,
+        asset: None,
+    });
+    root.prims.insert(p, p_spec);
+    store.insert_layer(root);
+
+    let mut ref_layer = Layer {
+        id: LayerId(2),
+        sublayers: vec![],
+        prims: HashMap::new(),
+    };
+    let mut q_spec = PrimSpec::default();
+    q_spec
+        .fields
+        .insert(field_x, FieldValue::Value(Value::Int(42)));
+    ref_layer.prims.insert(q, q_spec);
+    store.insert_layer(ref_layer);
+
+    let stage = Stage::compose(
+        &mut store,
+        LayerId(1),
+        StageOptions {
+            with_dependencies: true,
+            ..StageOptions::default()
+        },
+    );
+
+    let deps = stage.dependencies().expect("dependencies enabled");
+
+    // Should have a reference arc from Q → P.
+    let arcs = deps.arcs_targeting(p);
+    assert!(!arcs.is_empty(), "reference arc should target P");
+    let ref_arc = arcs
+        .iter()
+        .find(|a| a.arc_kind == ArcKind::References)
+        .expect("reference arc exists");
+    assert_eq!(ref_arc.source, q);
+    assert_eq!(ref_arc.layer, LayerId(2));
+
+    // LayerId(2) should affect P through the reference.
+    assert!(deps.layers_affecting_prim(p).contains(&LayerId(2)));
+}
+
+#[test]
+fn dependency_map_records_inherit_arc() {
+    let mut store = InMemoryStore::default();
+    let field_x = store.tokens.intern("x");
+    let p = path(&mut store, "/P");
+    let base = path(&mut store, "/Base");
+
+    let mut layer = Layer {
+        id: LayerId(1),
+        sublayers: vec![],
+        prims: HashMap::new(),
+    };
+    let mut p_spec = PrimSpec::default();
+    p_spec.inherits.append.push(base);
+    layer.prims.insert(p, p_spec);
+
+    let mut base_spec = PrimSpec::default();
+    base_spec
+        .fields
+        .insert(field_x, FieldValue::Value(Value::Int(10)));
+    layer.prims.insert(base, base_spec);
+    store.insert_layer(layer);
+
+    let stage = Stage::compose(
+        &mut store,
+        LayerId(1),
+        StageOptions {
+            with_dependencies: true,
+            ..StageOptions::default()
+        },
+    );
+
+    let deps = stage.dependencies().expect("dependencies enabled");
+
+    let arcs = deps.arcs_targeting(p);
+    let inh_arc = arcs
+        .iter()
+        .find(|a| a.arc_kind == ArcKind::Inherits)
+        .expect("inherit arc exists");
+    assert_eq!(inh_arc.source, base);
+}
+
+#[test]
+fn dependency_map_records_specializes_arc() {
+    let mut store = InMemoryStore::default();
+    let field_x = store.tokens.intern("x");
+    let p = path(&mut store, "/P");
+    let base = path(&mut store, "/Base");
+
+    let mut layer = Layer {
+        id: LayerId(1),
+        sublayers: vec![],
+        prims: HashMap::new(),
+    };
+    let mut p_spec = PrimSpec::default();
+    p_spec.specializes.append.push(base);
+    layer.prims.insert(p, p_spec);
+
+    let mut base_spec = PrimSpec::default();
+    base_spec
+        .fields
+        .insert(field_x, FieldValue::Value(Value::Int(10)));
+    layer.prims.insert(base, base_spec);
+    store.insert_layer(layer);
+
+    let stage = Stage::compose(
+        &mut store,
+        LayerId(1),
+        StageOptions {
+            with_dependencies: true,
+            ..StageOptions::default()
+        },
+    );
+
+    let deps = stage.dependencies().expect("dependencies enabled");
+
+    let arcs = deps.arcs_targeting(p);
+    let spec_arc = arcs
+        .iter()
+        .find(|a| a.arc_kind == ArcKind::Specializes)
+        .expect("specializes arc exists");
+    assert_eq!(spec_arc.source, base);
 }

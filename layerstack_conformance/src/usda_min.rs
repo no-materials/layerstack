@@ -381,11 +381,9 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
             if let Some(attr) = parse_any_attr(line)
                 && let Some(parent_def) = out.iter_mut().rev().find(|d| d.path == parent_path)
             {
-                parent_def.variant_fields.push((
-                    set_name.clone(),
-                    branch_name.clone(),
-                    attr,
-                ));
+                parent_def
+                    .variant_fields
+                    .push((set_name.clone(), branch_name.clone(), attr));
             }
         } else {
             // Regular prim scope (or a child prim nested inside a variant branch).
@@ -502,7 +500,9 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                             accumulator = None;
                         }
                     } else if (consumed.contains('[') && !consumed.contains(']'))
-                        || (consumed.starts_with("variants") && consumed.contains('{') && !consumed.contains('}'))
+                        || (consumed.starts_with("variants")
+                            && consumed.contains('{')
+                            && !consumed.contains('}'))
                     {
                         accumulator = Some(consumed);
                     } else {
@@ -622,7 +622,9 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
         // Detect `"branchName" {` or `"branchName" (metadata) {` inside a variant set.
         let variant_branch_name = if variant_set_name.is_none()
             && pending.is_none()
-            && brace_stack.last().map_or(false, |k| matches!(k, BraceKind::VariantSet(_)))
+            && brace_stack
+                .last()
+                .map_or(false, |k| matches!(k, BraceKind::VariantSet(_)))
         {
             parse_variant_branch_name(line)
         } else {
@@ -690,10 +692,7 @@ fn parse_prim_defs(text: &str) -> Vec<PrimDef> {
                         Some(BraceKind::VariantSet(s)) => s.clone(),
                         _ => String::new(),
                     };
-                    brace_stack.push(BraceKind::VariantBranchMeta(
-                        vb_set,
-                        branch_name.clone(),
-                    ));
+                    brace_stack.push(BraceKind::VariantBranchMeta(vb_set, branch_name.clone()));
                 }
             }
 
@@ -1388,10 +1387,11 @@ fn resolve_inherits_listop(
 ) -> ListOp<layerstack::PathId> {
     // Resolve relative paths (e.g. `../SymEyeRig`) relative to the prim path.
     let resolved = InheritsDef {
-        explicit: list
-            .explicit
-            .as_ref()
-            .map(|v| v.iter().map(|p| resolve_relative_path(p, prim_path)).collect()),
+        explicit: list.explicit.as_ref().map(|v| {
+            v.iter()
+                .map(|p| resolve_relative_path(p, prim_path))
+                .collect()
+        }),
         prepend: list
             .prepend
             .iter()
@@ -1417,10 +1417,11 @@ fn resolve_specializes_listop(
     prim_path: &str,
 ) -> ListOp<layerstack::PathId> {
     let resolved = SpecializesDef {
-        explicit: list
-            .explicit
-            .as_ref()
-            .map(|v| v.iter().map(|p| resolve_relative_path(p, prim_path)).collect()),
+        explicit: list.explicit.as_ref().map(|v| {
+            v.iter()
+                .map(|p| resolve_relative_path(p, prim_path))
+                .collect()
+        }),
         prepend: list
             .prepend
             .iter()
@@ -1572,7 +1573,7 @@ fn load_layer_with_prims(
     // Track which children are variant children so we exclude them from
     // the parent's authored_children (they go in VariantSpec::authored_children instead).
     let mut variant_child_names: std::collections::HashMap<
-        String, // parent path
+        String,                            // parent path
         std::collections::HashSet<String>, // child names that are variant children
     > = std::collections::HashMap::new();
     for prim in &prim_defs {
@@ -1602,9 +1603,7 @@ fn load_layer_with_prims(
 
         // Only add to authored_children if NOT a variant child.
         let is_variant_child = prim.variant_parent.is_some();
-        if !is_variant_child
-            && let Some(parent) = store.paths.resolve(prim_path).parent()
-        {
+        if !is_variant_child && let Some(parent) = store.paths.resolve(prim_path).parent() {
             let parent_id = store.paths.intern(parent);
             if let Some(name) = store.paths.resolve(prim_path).leaf() {
                 let list = children_by_parent.entry(parent_id).or_default();
@@ -1619,10 +1618,8 @@ fn load_layer_with_prims(
 
     // Collect variant children info for building VariantSpecs.
     // Key: (parent_path, set_name, branch_name) → Vec<child_name>
-    let mut variant_children_map: std::collections::HashMap<
-        (String, String, String),
-        Vec<String>,
-    > = std::collections::HashMap::new();
+    let mut variant_children_map: std::collections::HashMap<(String, String, String), Vec<String>> =
+        std::collections::HashMap::new();
     // Grandchild authored children: variant-scoped prims nested deeper than
     // the direct variant branch children (e.g. `over "Class" { def "Grandchild" {} }`
     // inside a variant). These go to the variant set owner's
@@ -1635,8 +1632,10 @@ fn load_layer_with_prims(
     // Build a map of paths → variant set names from their variant_parent.
     // A path may appear multiple times (e.g. `over "Class"` in both "high"
     // and "low" branches), so we collect all variant set names.
-    let mut variant_sets_by_path: std::collections::HashMap<String, std::collections::HashSet<String>> =
-        std::collections::HashMap::new();
+    let mut variant_sets_by_path: std::collections::HashMap<
+        String,
+        std::collections::HashSet<String>,
+    > = std::collections::HashMap::new();
     for (_, p) in &prim_defs_with_ids {
         if let Some((_, set, _)) = &p.variant_parent {
             variant_sets_by_path
@@ -1680,7 +1679,12 @@ fn load_layer_with_prims(
                     owner_path.to_string()
                 };
                 variant_grandchild_map
-                    .entry((owner_path, set.clone(), branch.clone(), child_leaf.to_string()))
+                    .entry((
+                        owner_path,
+                        set.clone(),
+                        branch.clone(),
+                        child_leaf.to_string(),
+                    ))
                     .or_default()
                     .push(leaf.to_string());
             } else {
@@ -1721,10 +1725,8 @@ fn load_layer_with_prims(
     // has composition arcs AND a non-variant definition exists at the same path,
     // the arcs should be stored on the parent's VariantSpec, not on the child's PrimSpec.
     // Key: parent_path → Vec<VariantChildArc>
-    let mut variant_child_arcs_by_parent: std::collections::HashMap<
-        String,
-        Vec<VariantChildArc>,
-    > = std::collections::HashMap::new();
+    let mut variant_child_arcs_by_parent: std::collections::HashMap<String, Vec<VariantChildArc>> =
+        std::collections::HashMap::new();
 
     // Variant child fields: when a child prim inside a variant branch has
     // fields AND a non-variant definition exists at the same path, the fields
@@ -1800,7 +1802,9 @@ fn load_layer_with_prims(
     }
 
     // Process all PrimDefs: non-variant first, then variant-only.
-    let all_defs = non_variant_defs.into_iter().chain(variant_only_defs.into_iter());
+    let all_defs = non_variant_defs
+        .into_iter()
+        .chain(variant_only_defs.into_iter());
     for (prim_path, prim) in all_defs {
         let mut spec = PrimSpec {
             specifier: Some(prim.specifier),
@@ -1992,11 +1996,12 @@ fn load_layer_with_prims(
                             branch.clone(),
                             child_name.clone(),
                         )) {
-                            let outer_toks: Vec<(layerstack::interner::TokenId, layerstack::interner::TokenId)> = outer
+                            let outer_toks: Vec<(
+                                layerstack::interner::TokenId,
+                                layerstack::interner::TokenId,
+                            )> = outer
                                 .iter()
-                                .map(|(os, ob)| {
-                                    (store.tokens.intern(os), store.tokens.intern(ob))
-                                })
+                                .map(|(os, ob)| (store.tokens.intern(os), store.tokens.intern(ob)))
                                 .collect();
                             variant_spec
                                 .required_outer_selections
@@ -2044,15 +2049,16 @@ fn load_layer_with_prims(
                             variant_spec.child_references.insert(child_tok, child_refs);
                         }
 
-                        let child_prim_path =
-                            format!("{}/{}", prim.path, arc.child_name);
+                        let child_prim_path = format!("{}/{}", prim.path, arc.child_name);
                         let child_inherits =
                             resolve_inherits_listop(&arc.inherits, store, &child_prim_path);
                         if !child_inherits.prepend.is_empty()
                             || !child_inherits.append.is_empty()
                             || child_inherits.explicit.is_some()
                         {
-                            variant_spec.child_inherits.insert(child_tok, child_inherits);
+                            variant_spec
+                                .child_inherits
+                                .insert(child_tok, child_inherits);
                         }
 
                         let child_specializes =
@@ -2061,7 +2067,9 @@ fn load_layer_with_prims(
                             || !child_specializes.append.is_empty()
                             || child_specializes.explicit.is_some()
                         {
-                            variant_spec.child_specializes.insert(child_tok, child_specializes);
+                            variant_spec
+                                .child_specializes
+                                .insert(child_tok, child_specializes);
                         }
 
                         let child_payloads = resolve_references(
@@ -2082,7 +2090,9 @@ fn load_layer_with_prims(
                             || !child_payloads.append.is_empty()
                             || child_payloads.explicit.is_some()
                         {
-                            variant_spec.child_payloads.insert(child_tok, child_payloads);
+                            variant_spec
+                                .child_payloads
+                                .insert(child_tok, child_payloads);
                         }
                     }
                 }
@@ -2114,10 +2124,7 @@ fn load_layer_with_prims(
                     let variant_spec = set_spec.variants.entry(branch_tok).or_default();
                     for (child_name, attrs, time_samples) in child_entries {
                         let child_tok = store.tokens.intern(child_name);
-                        let child_fields = variant_spec
-                            .child_fields
-                            .entry(child_tok)
-                            .or_default();
+                        let child_fields = variant_spec.child_fields.entry(child_tok).or_default();
                         for attr_name in attrs {
                             // attrs are already parsed attribute names.
                             let key = store.tokens.intern(attr_name);

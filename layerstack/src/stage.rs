@@ -7,6 +7,7 @@ use alloc::{vec, vec::Vec};
 use hashbrown::HashMap;
 
 use crate::{
+    dependency_map::DependencyMap,
     doc::{FieldValue, InterpolationType, LayerId, LayerStore, Specifier, Value},
     interner::TokenId,
     listop::{ListOp, resolve_list_chain},
@@ -61,6 +62,8 @@ pub struct StageOptions {
     pub mask: Option<PopulationMask>,
     /// Whether resolution APIs return provenance.
     pub with_provenance: bool,
+    /// Whether to record dependency edges during composition.
+    pub with_dependencies: bool,
 }
 
 /// A composed stage: read-only facade over composition results.
@@ -69,6 +72,7 @@ pub struct Stage {
     prims: HashMap<PathId, PrimIndex>,
     children: HashMap<PathId, Vec<PathId>>,
     with_provenance: bool,
+    dependencies: Option<DependencyMap>,
 }
 
 impl Stage {
@@ -81,12 +85,21 @@ impl Stage {
         prims: HashMap<PathId, PrimIndex>,
         children: HashMap<PathId, Vec<PathId>>,
         with_provenance: bool,
+        dependencies: Option<DependencyMap>,
     ) -> Self {
         Self {
             prims,
             children,
             with_provenance,
+            dependencies,
         }
+    }
+
+    /// Returns the dependency map if composition was run with
+    /// [`StageOptions::with_dependencies`] enabled.
+    #[must_use]
+    pub fn dependencies(&self) -> Option<&DependencyMap> {
+        self.dependencies.as_ref()
     }
 
     /// Resolves a field on a prim.
@@ -304,11 +317,7 @@ impl Stage {
     ///
     /// Spec: AOUSD Core §12.2.1 (specifier resolution), §7.6.
     #[must_use]
-    pub fn resolve_specifier(
-        &self,
-        prim: PathId,
-        store: &dyn LayerStore,
-    ) -> Option<Specifier> {
+    pub fn resolve_specifier(&self, prim: PathId, store: &dyn LayerStore) -> Option<Specifier> {
         let index = self.prims.get(&prim)?;
         let mut strongest_defining: Option<Specifier> = None;
 
@@ -349,10 +358,7 @@ impl Stage {
     /// Returns `true` if the prim is *abstract* (specifier resolves to `class`).
     #[must_use]
     pub fn is_abstract(&self, prim: PathId, store: &dyn LayerStore) -> bool {
-        matches!(
-            self.resolve_specifier(prim, store),
-            Some(Specifier::Class)
-        )
+        matches!(self.resolve_specifier(prim, store), Some(Specifier::Class))
     }
 
     fn provenance_for(&self, field: TokenId, strongest: &Opinion) -> Option<Provenance> {
@@ -407,7 +413,9 @@ fn interpolate_samples(
     }
 
     // Binary search for the bracketing samples.
-    match samples.binary_search_by(|(t, _)| t.partial_cmp(&time).unwrap_or(core::cmp::Ordering::Equal)) {
+    match samples
+        .binary_search_by(|(t, _)| t.partial_cmp(&time).unwrap_or(core::cmp::Ordering::Equal))
+    {
         // Exact match.
         Ok(idx) => Some(samples[idx].1.clone()),
         // Between or outside samples.
@@ -425,15 +433,13 @@ fn interpolate_samples(
                         // Step function: return the earlier sample's value.
                         Some(samples[idx - 1].1.clone())
                     }
-                    InterpolationType::Linear => {
-                        lerp_values(
-                            &samples[idx - 1].1,
-                            &samples[idx].1,
-                            samples[idx - 1].0,
-                            samples[idx].0,
-                            time,
-                        )
-                    }
+                    InterpolationType::Linear => lerp_values(
+                        &samples[idx - 1].1,
+                        &samples[idx].1,
+                        samples[idx - 1].0,
+                        samples[idx].0,
+                        time,
+                    ),
                 }
             }
         }

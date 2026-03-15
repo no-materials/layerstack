@@ -158,10 +158,9 @@ fn assert_pcp_composing(loaded: &mut LoadedStage, pcp_path: &Path) {
                         .clone();
                 let expected_path_id = loaded.store.paths.intern(expected_path);
 
-                let found = actual
-                    .iter()
-                    .any(|(layer_id, spec_path)| *layer_id == expected_layer
-                        && *spec_path == expected_path_id);
+                let found = actual.iter().any(|(layer_id, spec_path)| {
+                    *layer_id == expected_layer && *spec_path == expected_path_id
+                });
                 if !found {
                     eprintln!("  Prim stack for {prim_path}:");
                     for (lid, sid) in &actual {
@@ -220,12 +219,10 @@ fn assert_pcp_composing(loaded: &mut LoadedStage, pcp_path: &Path) {
                             panic!("unexpected property stack value {expected_spec}")
                         });
                     let base_prim_path = strip_variant_notation(expected_prim_path);
-                    let expected_prim = layerstack::Path::parse_absolute(
-                        &base_prim_path,
-                        &mut loaded.store.tokens,
-                    )
-                    .expect("expected prim path")
-                    .clone();
+                    let expected_prim =
+                        layerstack::Path::parse_absolute(&base_prim_path, &mut loaded.store.tokens)
+                            .expect("expected prim path")
+                            .clone();
                     let expected_prim_id = loaded.store.paths.intern(expected_prim);
 
                     assert!(
