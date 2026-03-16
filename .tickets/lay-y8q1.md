@@ -2,7 +2,7 @@
 id: lay-y8q1
 status: open
 deps: [lay-rsdo]
-links: []
+links: [lay-kl8k]
 created: 2026-03-13T18:08:22Z
 type: feature
 priority: 3
