@@ -50,3 +50,24 @@ pub mod lexer;
 )]
 mod span;
 pub use span::{Span, TextPosition};
+
+pub mod ast;
+pub mod diagnostic;
+
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "USDA files >4GB are unrealistic; u32 spans are intentional"
+)]
+pub mod cst;
+
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "USDA files >4GB are unrealistic; u32 spans are intentional"
+)]
+pub mod parser;
+
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "USDA files >4GB are unrealistic; u32 spans are intentional"
+)]
+pub mod lower;
