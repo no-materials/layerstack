@@ -95,6 +95,15 @@ pub enum Value {
     ///
     /// Spec: AOUSD Core §12.3 (value blocking), §16.3.10.16 (`ValueBlock` type).
     Blocked,
+    /// An ordered sequence of values (tuples and arrays).
+    ///
+    /// Stores both fixed-size tuples (e.g. `(1.0, 2.0, 3.0)` from a
+    /// `float3` attribute) and variable-length arrays (e.g. `[1, 2, 3]`
+    /// from an `int[]` attribute). Type semantics are carried externally
+    /// by the attribute's type name, not by the value itself.
+    ///
+    /// Spec: AOUSD Core §6.2 (scene description data types).
+    Array(Vec<Self>),
     /// A dictionary of string-keyed values, maintaining insertion order.
     ///
     /// Dictionary-valued fields use combining semantics during value
@@ -127,6 +136,16 @@ impl fmt::Display for Value {
                 write!(f, "opaque({type_name:?}, {} bytes)", bytes.len())
             }
             Self::Blocked => write!(f, "blocked"),
+            Self::Array(items) => {
+                write!(f, "[")?;
+                for (i, v) in items.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{v}")?;
+                }
+                write!(f, "]")
+            }
             Self::Dictionary(entries) => {
                 write!(f, "{{")?;
                 for (i, (k, v)) in entries.iter().enumerate() {

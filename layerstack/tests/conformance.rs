@@ -1669,3 +1669,46 @@ fn resolve_value_returns_dictionary_variant() {
         other => panic!("expected ResolvedValue::Dictionary, got {:?}", other),
     }
 }
+
+// ── Array value resolution ────────────────────────────────────────────
+
+#[test]
+fn array_value_strongest_wins() {
+    // Array values resolve with strongest-wins like other scalars.
+    let mut store = InMemoryStore::default();
+    let field = store.tokens.intern("points");
+    let p = store.path("/P");
+
+    let mut root_layer = Layer::new(LayerId(1));
+    root_layer.sublayers.push(LayerId(2));
+    root_layer.insert_prim(
+        p,
+        PrimSpec::def().with_field(
+            field,
+            Value::Array(vec![Value::Float(1.0), Value::Float(2.0)]),
+        ),
+    );
+    store.insert_layer(root_layer);
+
+    let mut sub_layer = Layer::new(LayerId(2));
+    sub_layer.insert_prim(
+        p,
+        PrimSpec::default().with_field(
+            field,
+            Value::Array(vec![
+                Value::Float(9.0),
+                Value::Float(8.0),
+                Value::Float(7.0),
+            ]),
+        ),
+    );
+    store.insert_layer(sub_layer);
+
+    let stage = Stage::compose(&mut store, LayerId(1), StageOptions::default());
+    let resolved = stage.resolve_field(p, field).expect("array resolves");
+    // Strongest wins — root's 2-element array, not sublayer's 3-element array.
+    assert_eq!(
+        resolved.value,
+        Value::Array(vec![Value::Float(1.0), Value::Float(2.0)])
+    );
+}

@@ -588,7 +588,10 @@ impl Stage {
     ///
     /// Spec: AOUSD Core §6.6.2.1 (dictionary combining), §12.2.5.
     #[must_use]
-    #[allow(clippy::type_complexity, reason = "Resolved<Vec<(Arc<str>, Value)>> is the natural return type")]
+    #[allow(
+        clippy::type_complexity,
+        reason = "Resolved<Vec<(Arc<str>, Value)>> is the natural return type"
+    )]
     pub fn resolve_dictionary(
         &self,
         prim: PathId,

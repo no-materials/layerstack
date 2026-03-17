@@ -1,6 +1,6 @@
 ---
 id: lay-on89
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-03-13T18:07:46Z
@@ -44,3 +44,7 @@ Crate structure:
   lower.rs  — CST → AST
   bridge.rs — AST → Layer/PrimSpec
   error.rs  — diagnostics
+
+**2026-03-17T14:10:58Z**
+
+Tuple/Array data loss fixed: Value::Array variant added to doc model, emit pipeline now preserves compound values with correct element type decomposition (element_type_hint). 167 parser tests + 45 conformance tests pass. Remaining 5 ignored PCP tests are composition engine issues (variant-qualified spec paths, fallback variant selection), not parser gaps.

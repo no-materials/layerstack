@@ -1018,8 +1018,14 @@ impl EmitCtx<'_> {
                     .collect();
                 Value::Dictionary(dict_entries)
             }
-            // Compound types not yet modeled in layerstack Value.
-            ast::Value::Tuple(_) | ast::Value::Array(_) => Value::Null,
+            ast::Value::Tuple(items) | ast::Value::Array(items) => {
+                let elem_hint = element_type_hint(type_hint);
+                let elements: Vec<Value> = items
+                    .iter()
+                    .map(|v| self.convert_value(v, elem_hint))
+                    .collect();
+                Value::Array(elements)
+            }
         }
     }
 
@@ -1076,6 +1082,78 @@ fn convert_specifier(spec: ast::Specifier) -> Specifier {
         ast::Specifier::Over => Specifier::Over,
         ast::Specifier::Class => Specifier::Class,
     }
+}
+
+// ── Type hint decomposition ─────────────────────────────────────────────
+
+/// Extract the scalar element type from a compound USD type name.
+///
+/// Handles vector types (`float3` → `float`), array types (`int[]` → `int`),
+/// combined forms (`float3[]` → `float`), and named compound types
+/// (`color3f` → `float`, `matrix4d` → `double`, `quatf` → `float`).
+///
+/// Returns the original hint unchanged for already-scalar types.
+///
+/// Spec: AOUSD Core §6.2 (scene description data types).
+fn element_type_hint(hint: &str) -> &str {
+    // Strip array suffix first: "float3[]" → "float3", "int[]" → "int"
+    let base = hint.strip_suffix("[]").unwrap_or(hint);
+
+    // Named compound types with element-type suffixes.
+    // color3f, color4f, normal3f, point3f, vector3f, texCoord2f, texCoord3f → float
+    // color3d, color4d, normal3d, point3d, vector3d, texCoord2d, texCoord3d → double
+    // color3h, normal3h, point3h, vector3h, texCoord2h, texCoord3h → half
+    if base.ends_with('f')
+        && (base.starts_with("color")
+            || base.starts_with("normal")
+            || base.starts_with("point")
+            || base.starts_with("vector")
+            || base.starts_with("texCoord"))
+    {
+        return "float";
+    }
+    if base.ends_with('d')
+        && (base.starts_with("color")
+            || base.starts_with("normal")
+            || base.starts_with("point")
+            || base.starts_with("vector")
+            || base.starts_with("texCoord"))
+    {
+        return "double";
+    }
+    if base.ends_with('h')
+        && (base.starts_with("color")
+            || base.starts_with("normal")
+            || base.starts_with("point")
+            || base.starts_with("vector")
+            || base.starts_with("texCoord"))
+    {
+        return "half";
+    }
+
+    // matrix2d, matrix3d, matrix4d → double
+    if base.starts_with("matrix") && base.ends_with('d') {
+        return "double";
+    }
+
+    // quatf → float, quatd → double, quath → half
+    match base {
+        "quatf" => return "float",
+        "quatd" => return "double",
+        "quath" => return "half",
+        _ => {}
+    }
+
+    // Simple vector types: float2, float3, float4, double2, double3, double4,
+    // int2, int3, int4, half2, half3, half4, etc.
+    // Strip trailing digits to get the scalar type.
+    let trimmed = base.trim_end_matches(|c: char| c.is_ascii_digit());
+    if !trimmed.is_empty() && trimmed.len() < base.len() {
+        return trimmed;
+    }
+
+    // Already scalar or unrecognised — return as-is.
+    base
 }
 
 // ── Numeric conversion with type hints ──────────────────────────────────
@@ -1951,6 +2029,88 @@ def \"A\" {
                 assert_eq!(entries[0].1, Value::String(Arc::from("value")));
             }
             other => panic!("expected Dictionary, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn emit_tuple_float3() {
+        let src = "#usda 1.0\ndef \"A\" {\n    float3 pos = (1.0, 2.0, 3.0)\n}\n";
+        let (result, mut tokens, _paths) = emit_source(src);
+        let a_path = Path::parse_absolute("/A", &mut tokens).unwrap();
+        let a_id = _paths.lookup(&a_path).expect("/A");
+        let spec = result.layer.prims.get(&a_id).unwrap();
+        let pos_tok = tokens.intern("pos");
+        let field = get_field(&spec.fields, &pos_tok).expect("pos field");
+        match field {
+            FieldValue::Value(Value::Array(items)) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0], Value::Float(1.0));
+                assert_eq!(items[1], Value::Float(2.0));
+                assert_eq!(items[2], Value::Float(3.0));
+            }
+            other => panic!("expected Array, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn emit_array_int() {
+        let src = "#usda 1.0\ndef \"A\" {\n    int[] ids = [1, 2, 3]\n}\n";
+        let (result, mut tokens, _paths) = emit_source(src);
+        let a_path = Path::parse_absolute("/A", &mut tokens).unwrap();
+        let a_id = _paths.lookup(&a_path).expect("/A");
+        let spec = result.layer.prims.get(&a_id).unwrap();
+        let ids_tok = tokens.intern("ids");
+        let field = get_field(&spec.fields, &ids_tok).expect("ids field");
+        match field {
+            FieldValue::Value(Value::Array(items)) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0], Value::Int(1));
+                assert_eq!(items[1], Value::Int(2));
+                assert_eq!(items[2], Value::Int(3));
+            }
+            other => panic!("expected Array, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn emit_nested_array() {
+        // Array of tuples: float3[] points = [(1, 2, 3), (4, 5, 6)]
+        let src = "#usda 1.0\ndef \"A\" {\n    float3[] points = [(1, 2, 3), (4, 5, 6)]\n}\n";
+        let (result, mut tokens, _paths) = emit_source(src);
+        let a_path = Path::parse_absolute("/A", &mut tokens).unwrap();
+        let a_id = _paths.lookup(&a_path).expect("/A");
+        let spec = result.layer.prims.get(&a_id).unwrap();
+        let pts_tok = tokens.intern("points");
+        let field = get_field(&spec.fields, &pts_tok).expect("points field");
+        match field {
+            FieldValue::Value(Value::Array(items)) => {
+                assert_eq!(items.len(), 2);
+                match &items[0] {
+                    Value::Array(inner) => {
+                        assert_eq!(inner.len(), 3);
+                        assert_eq!(inner[0], Value::Float(1.0));
+                    }
+                    other => panic!("expected nested Array, got {:?}", other),
+                }
+            }
+            other => panic!("expected Array, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn emit_empty_array() {
+        let src = "#usda 1.0\ndef \"A\" {\n    int[] empty = []\n}\n";
+        let (result, mut tokens, _paths) = emit_source(src);
+        let a_path = Path::parse_absolute("/A", &mut tokens).unwrap();
+        let a_id = _paths.lookup(&a_path).expect("/A");
+        let spec = result.layer.prims.get(&a_id).unwrap();
+        let empty_tok = tokens.intern("empty");
+        let field = get_field(&spec.fields, &empty_tok).expect("empty field");
+        match field {
+            FieldValue::Value(Value::Array(items)) => {
+                assert!(items.is_empty());
+            }
+            other => panic!("expected empty Array, got {:?}", other),
         }
     }
 }
