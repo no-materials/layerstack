@@ -240,6 +240,11 @@ impl EmitCtx<'_> {
                     spec.fields
                         .insert(key, FieldValue::Value(Value::String(Arc::from(*doc))));
                 }
+                ast::PrimMeta::Custom(entry) if entry.key == "instanceable" => {
+                    if let ast::MetadataValue::Value(ast::Value::Bool(b)) = &entry.value {
+                        spec.instanceable = Some(*b);
+                    }
+                }
                 ast::PrimMeta::Custom(entry) => {
                     let key = self.tokens.intern(entry.key);
                     let val = self.convert_metadata_value(&entry.value);
@@ -1664,5 +1669,27 @@ def Scope "D" (
             &[(standin_tok, anim_tok)],
             "required_outer_selections for anim_spooky_sphere"
         );
+    }
+
+    #[test]
+    fn emit_instanceable() {
+        // Lowercase `true` (Rust-style).
+        let src = "#usda 1.0\ndef Xform \"root\" (instanceable = true) {\n}\n";
+        let (result, mut tokens, paths) = emit_source(src);
+        let root_path = Path::parse_absolute("/root", &mut tokens).unwrap();
+        let root_id = paths.lookup(&root_path).expect("root path interned");
+        let spec = result.layer.prims.get(&root_id).expect("root prim");
+        assert_eq!(spec.instanceable, Some(true));
+    }
+
+    #[test]
+    fn emit_instanceable_capitalized() {
+        // Capitalized `True` (Python-style, common in USDA files).
+        let src = "#usda 1.0\ndef Xform \"root\" (instanceable = True) {\n}\n";
+        let (result, mut tokens, paths) = emit_source(src);
+        let root_path = Path::parse_absolute("/root", &mut tokens).unwrap();
+        let root_id = paths.lookup(&root_path).expect("root path interned");
+        let spec = result.layer.prims.get(&root_id).expect("root prim");
+        assert_eq!(spec.instanceable, Some(true));
     }
 }

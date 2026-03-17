@@ -952,8 +952,8 @@ impl<'a> LowerCtx<'a> {
             SyntaxKind::Ident => {
                 let text = self.text(self.node_from(tree, id));
                 match text {
-                    "true" => Value::Bool(true),
-                    "false" => Value::Bool(false),
+                    "true" | "True" => Value::Bool(true),
+                    "false" | "False" => Value::Bool(false),
                     "None" => Value::Blocked,
                     "inf" => Value::Number(f64::INFINITY),
                     "nan" => Value::Number(f64::NAN),

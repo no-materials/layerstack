@@ -621,7 +621,6 @@ fn specializes_and_variants2_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires instancing child-pruning in composition engine"]
 fn basic_instancing_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("BasicInstancing_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
@@ -629,7 +628,6 @@ fn basic_instancing_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires instancing child-pruning in composition engine"]
 fn basic_instancing_and_nested_instances_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("BasicInstancingAndNestedInstances_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
