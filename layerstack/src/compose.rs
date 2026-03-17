@@ -1236,7 +1236,7 @@ fn add_local_and_variant_opinions(
                     spec_path: path,
                 });
 
-            for (field, value) in &spec.fields {
+            for entry in &spec.fields {
                 out.get_mut(&path)
                     .expect("path exists")
                     .add_opinion(Opinion {
@@ -1251,8 +1251,8 @@ fn add_local_and_variant_opinions(
                             layer_id,
                             spec_path: path,
                         },
-                        field: *field,
-                        value: value.clone(),
+                        field: entry.name,
+                        value: entry.value.clone(),
                     });
             }
 
@@ -1312,7 +1312,7 @@ fn add_local_and_variant_opinions(
                         spec_path: path,
                     });
 
-                for (field, value) in &variant_spec.fields {
+                for entry in &variant_spec.fields {
                     out.get_mut(&path)
                         .expect("path exists")
                         .add_opinion(Opinion {
@@ -1327,8 +1327,8 @@ fn add_local_and_variant_opinions(
                                 layer_id,
                                 spec_path: path,
                             },
-                            field: *field,
-                            value: value.clone(),
+                            field: entry.name,
+                            value: entry.value.clone(),
                         });
                 }
 
@@ -1342,7 +1342,7 @@ fn add_local_and_variant_opinions(
                         let child_ns_depth =
                             u16::try_from(store.paths().resolve(child_path_id).depth())
                                 .unwrap_or(u16::MAX);
-                        for (field, value) in child_fields {
+                        for entry in child_fields {
                             out.get_mut(&child_path_id)
                                 .expect("path exists")
                                 .add_opinion(Opinion {
@@ -1357,8 +1357,8 @@ fn add_local_and_variant_opinions(
                                         layer_id,
                                         spec_path: child_path_id,
                                     },
-                                    field: *field,
-                                    value: value.clone(),
+                                    field: entry.name,
+                                    value: entry.value.clone(),
                                 });
                         }
                         out.get_mut(&child_path_id)
@@ -1636,8 +1636,13 @@ fn add_inherit_edge_opinions(
                         spec_path: *remote_path_id,
                     },
                 ));
-                for (field, value) in &spec.fields {
-                    pending.push((*dest_path_id, *remote_path_id, *field, value.clone()));
+                for entry in &spec.fields {
+                    pending.push((
+                        *dest_path_id,
+                        *remote_path_id,
+                        entry.name,
+                        entry.value.clone(),
+                    ));
                 }
 
                 // Forward variant opinions from selected variants through inherits.
@@ -1647,8 +1652,13 @@ fn add_inherit_edge_opinions(
                     if let Some(set_spec) = spec.variant_sets.get(set)
                         && let Some(variant_spec) = set_spec.variants.get(selected)
                     {
-                        for (field, value) in &variant_spec.fields {
-                            pending.push((*dest_path_id, *remote_path_id, *field, value.clone()));
+                        for entry in &variant_spec.fields {
+                            pending.push((
+                                *dest_path_id,
+                                *remote_path_id,
+                                entry.name,
+                                entry.value.clone(),
+                            ));
                         }
                     }
                 }
@@ -1670,12 +1680,12 @@ fn add_inherit_edge_opinions(
                             && let Some(variant_spec) = set_spec.variants.get(selected)
                             && let Some(child_fields) = variant_spec.child_fields.get(&remote_leaf)
                         {
-                            for (field, value) in child_fields {
+                            for entry in child_fields {
                                 pending.push((
                                     *dest_path_id,
                                     *remote_path_id,
-                                    *field,
-                                    value.clone(),
+                                    entry.name,
+                                    entry.value.clone(),
                                 ));
                             }
                         }
@@ -2202,8 +2212,8 @@ fn add_reference_edge_opinions(
             };
             pending_sources.push((*dest_path_id, base_key));
 
-            for (field, value) in &remote_spec.fields {
-                pending_fields.push((*dest_path_id, *field, base_key, value.clone()));
+            for entry in &remote_spec.fields {
+                pending_fields.push((*dest_path_id, entry.name, base_key, entry.value.clone()));
             }
 
             // Forward variant opinions from selected variants.
@@ -2216,10 +2226,10 @@ fn add_reference_edge_opinions(
                     if let Some(set_spec) = remote_spec.variant_sets.get(set)
                         && let Some(variant_spec) = set_spec.variants.get(selected)
                     {
-                        for (field, value) in &variant_spec.fields {
+                        for entry in &variant_spec.fields {
                             pending_fields.push((
                                 *dest_path_id,
-                                *field,
+                                entry.name,
                                 OpinionKey {
                                     is_local: false,
                                     arc_kind: ArcKind::References,
@@ -2231,7 +2241,7 @@ fn add_reference_edge_opinions(
                                     layer_id: remote_layer_id,
                                     spec_path: *remote_path_id,
                                 },
-                                value.clone(),
+                                entry.value.clone(),
                             ));
                         }
 
@@ -2275,10 +2285,10 @@ fn add_reference_edge_opinions(
                                 let child_ns =
                                     u16::try_from(store.paths().resolve(child_path_id).depth())
                                         .unwrap_or(u16::MAX);
-                                for (field, value) in child_fields {
+                                for entry in child_fields {
                                     pending_fields.push((
                                         child_path_id,
-                                        *field,
+                                        entry.name,
                                         OpinionKey {
                                             is_local: false,
                                             arc_kind: ArcKind::References,
@@ -2290,7 +2300,7 @@ fn add_reference_edge_opinions(
                                             layer_id: remote_layer_id,
                                             spec_path: child_path_id,
                                         },
-                                        value.clone(),
+                                        entry.value.clone(),
                                     ));
                                 }
                                 out.get_mut(&child_path_id)
@@ -2695,7 +2705,7 @@ fn add_payload_edge_opinions(
                 },
             ));
 
-            for (field, value) in &remote_spec.fields {
+            for entry in &remote_spec.fields {
                 out.get_mut(dest_path_id)
                     .expect("path exists")
                     .add_opinion(Opinion {
@@ -2710,8 +2720,8 @@ fn add_payload_edge_opinions(
                             layer_id: remote_layer_id,
                             spec_path: *remote_path_id,
                         },
-                        field: *field,
-                        value: value.clone(),
+                        field: entry.name,
+                        value: entry.value.clone(),
                     });
             }
 
@@ -3066,8 +3076,13 @@ fn add_specializes_edge_opinions(
                         spec_path: *remote_path_id,
                     },
                 ));
-                for (field, value) in &spec.fields {
-                    pending.push((*dest_path_id, *remote_path_id, *field, value.clone()));
+                for entry in &spec.fields {
+                    pending.push((
+                        *dest_path_id,
+                        *remote_path_id,
+                        entry.name,
+                        entry.value.clone(),
+                    ));
                 }
 
                 // Forward variant opinions from selected variants through specializes.
@@ -3077,8 +3092,13 @@ fn add_specializes_edge_opinions(
                     if let Some(set_spec) = spec.variant_sets.get(set)
                         && let Some(variant_spec) = set_spec.variants.get(selected)
                     {
-                        for (field, value) in &variant_spec.fields {
-                            pending.push((*dest_path_id, *remote_path_id, *field, value.clone()));
+                        for entry in &variant_spec.fields {
+                            pending.push((
+                                *dest_path_id,
+                                *remote_path_id,
+                                entry.name,
+                                entry.value.clone(),
+                            ));
                         }
                     }
                 }

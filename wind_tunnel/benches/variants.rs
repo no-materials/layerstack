@@ -51,12 +51,15 @@ fn build_and_compose(n_prims: usize, n_variants: usize) -> Stage {
             }
 
             let mut vspec = VariantSpec::default();
-            vspec.fields.insert(
-                f_material,
-                Value::String(alloc::format!("mat_{branch_name}").into()).into(),
-            );
+            vspec.fields.push(layerstack::FieldEntry {
+                name: f_material,
+                value: Value::String(alloc::format!("mat_{branch_name}").into()).into(),
+            });
             let detail = v as i32;
-            vspec.fields.insert(f_detail, Value::Int(detail).into());
+            vspec.fields.push(layerstack::FieldEntry {
+                name: f_detail,
+                value: Value::Int(detail).into(),
+            });
 
             // Each branch introduces a child prim.
             let child_name = alloc::format!("detail_{branch_name}");

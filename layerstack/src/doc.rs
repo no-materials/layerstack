@@ -159,6 +159,20 @@ impl From<f64> for Value {
     }
 }
 
+/// A named field entry on a prim spec or variant spec.
+///
+/// This pairs a field name (interned token) with its value, and carries
+/// per-field metadata such as whether the field was declared `custom`.
+///
+/// Spec: AOUSD Core §6 (scene description data model), §7 (opinions).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldEntry {
+    /// The interned field name.
+    pub name: TokenId,
+    /// The field value.
+    pub value: FieldValue,
+}
+
 /// A field value stored on a prim spec.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FieldValue {
@@ -272,7 +286,7 @@ impl Reference {
 #[derive(Clone, Debug, Default)]
 pub struct VariantSpec {
     /// Authored fields within this variant.
-    pub fields: HashMap<TokenId, FieldValue>,
+    pub fields: Vec<FieldEntry>,
     /// Child prim names introduced by this variant branch.
     ///
     /// These children are only populated when this variant is selected.
@@ -310,7 +324,7 @@ pub struct VariantSpec {
     /// When a child prim (e.g. `class "Child" { bool attr = 0 }`) inside a
     /// variant branch defines field values, they are recorded here keyed by the
     /// child prim name. These opinions apply only when this variant is selected.
-    pub child_fields: HashMap<TokenId, HashMap<TokenId, FieldValue>>,
+    pub child_fields: HashMap<TokenId, Vec<FieldEntry>>,
     /// References arcs on this variant branch itself.
     ///
     /// When a variant branch header includes composition arcs
@@ -348,8 +362,10 @@ impl VariantSpec {
         for (child, reqs) in other.required_outer_selections {
             self.required_outer_selections.entry(child).or_insert(reqs);
         }
-        for (k, v) in other.fields {
-            self.fields.entry(k).or_insert(v);
+        for entry in other.fields {
+            if !self.fields.iter().any(|e| e.name == entry.name) {
+                self.fields.push(entry);
+            }
         }
         for (k, v) in other.child_references {
             self.child_references.entry(k).or_insert(v);
@@ -373,8 +389,10 @@ impl VariantSpec {
         }
         for (k, v) in other.child_fields {
             let existing = self.child_fields.entry(k).or_default();
-            for (field, val) in v {
-                existing.entry(field).or_insert(val);
+            for entry in v {
+                if !existing.iter().any(|e| e.name == entry.name) {
+                    existing.push(entry);
+                }
             }
         }
         for (k, v) in other.variant_selections {
@@ -406,7 +424,7 @@ pub struct PrimSpec {
     /// Spec: AOUSD Core §7.6 (typeName field), §12.2.3 (type name resolution).
     pub type_name: Option<TokenId>,
     /// Authored fields.
-    pub fields: HashMap<TokenId, FieldValue>,
+    pub fields: Vec<FieldEntry>,
     /// Authored child prim names in this layer, in file order.
     ///
     /// This is used as a deterministic baseline for child ordering. Child
@@ -506,15 +524,15 @@ impl PrimSpec {
         self
     }
 
-    /// Inserts a field value, returning `&mut Self` for chaining.
+    /// Inserts or replaces a field value, returning `&mut Self` for chaining.
     pub fn set_field(&mut self, token: TokenId, value: impl Into<FieldValue>) -> &mut Self {
-        self.fields.insert(token, value.into());
+        set_field_vec(&mut self.fields, token, value.into());
         self
     }
 
-    /// Inserts a field value (builder, consuming).
+    /// Inserts or replaces a field value (builder, consuming).
     pub fn with_field(mut self, token: TokenId, value: impl Into<FieldValue>) -> Self {
-        self.fields.insert(token, value.into());
+        set_field_vec(&mut self.fields, token, value.into());
         self
     }
 
@@ -587,6 +605,41 @@ impl PrimSpec {
     pub fn with_active(mut self, active: bool) -> Self {
         self.active = Some(active);
         self
+    }
+}
+
+/// Inserts or replaces a field in a `Vec<FieldEntry>` by name.
+///
+/// If a field with the given name already exists, its value is replaced.
+/// Otherwise a new entry is appended.
+pub fn set_field_vec(fields: &mut Vec<FieldEntry>, name: TokenId, value: FieldValue) {
+    if let Some(entry) = fields.iter_mut().find(|e| e.name == name) {
+        entry.value = value;
+    } else {
+        fields.push(FieldEntry { name, value });
+    }
+}
+
+/// Returns a shared reference to the value of a field, if present.
+pub fn get_field<'a>(fields: &'a [FieldEntry], name: &TokenId) -> Option<&'a FieldValue> {
+    fields.iter().find(|e| &e.name == name).map(|e| &e.value)
+}
+
+/// Returns a mutable reference to the value of a field, if present.
+pub fn get_field_mut<'a>(
+    fields: &'a mut [FieldEntry],
+    name: &TokenId,
+) -> Option<&'a mut FieldValue> {
+    fields
+        .iter_mut()
+        .find(|e| &e.name == name)
+        .map(|e| &mut e.value)
+}
+
+/// Inserts a field only if no entry with the same name exists.
+pub fn insert_field_if_absent(fields: &mut Vec<FieldEntry>, name: TokenId, value: FieldValue) {
+    if !fields.iter().any(|e| e.name == name) {
+        fields.push(FieldEntry { name, value });
     }
 }
 

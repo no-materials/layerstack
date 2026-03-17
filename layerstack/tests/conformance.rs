@@ -1,10 +1,8 @@
 #![allow(missing_docs, reason = "integration tests")]
 
-use layerstack::HashMap;
-
 use layerstack::{
-    ArcKind, FieldValue, Layer, LayerId, ListOp, PrimSpec, Reference, ResolvedValue, Stage,
-    StageOptions, Value, VariantSetSpec, VariantSpec, doc::InMemoryStore,
+    ArcKind, FieldEntry, FieldValue, Layer, LayerId, ListOp, PrimSpec, Reference, ResolvedValue,
+    Stage, StageOptions, Value, VariantSetSpec, VariantSpec, doc::InMemoryStore,
 };
 
 #[test]
@@ -95,22 +93,24 @@ fn variants_selection_is_strength_ordered() {
     sub_spec.variant_selections.insert(set_v, variant_b);
 
     let mut set_spec = VariantSetSpec::default();
-    let mut fields_a = HashMap::new();
-    fields_a.insert(field_x, Value::Int64(1).into());
     set_spec.variants.insert(
         variant_a,
         VariantSpec {
-            fields: fields_a,
+            fields: vec![FieldEntry {
+                name: field_x,
+                value: Value::Int64(1).into(),
+            }],
             ..Default::default()
         },
     );
 
-    let mut fields_b = HashMap::new();
-    fields_b.insert(field_x, Value::Int64(2).into());
     set_spec.variants.insert(
         variant_b,
         VariantSpec {
-            fields: fields_b,
+            fields: vec![FieldEntry {
+                name: field_x,
+                value: Value::Int64(2).into(),
+            }],
             ..Default::default()
         },
     );
@@ -136,7 +136,7 @@ fn listop_chain_is_applied_strong_to_weak() {
     let mut root_layer = Layer::new(LayerId(1));
     root_layer.sublayers = vec![LayerId(2)];
     let mut root_spec = PrimSpec::default();
-    root_spec.fields.insert(
+    root_spec.set_field(
         field_classes,
         FieldValue::TokenListOp(ListOp {
             append: vec![class_a],
@@ -148,7 +148,7 @@ fn listop_chain_is_applied_strong_to_weak() {
 
     let mut sub_layer = Layer::new(LayerId(2));
     let mut sub_spec = PrimSpec::default();
-    sub_spec.fields.insert(
+    sub_spec.set_field(
         field_classes,
         FieldValue::TokenListOp(ListOp {
             append: vec![class_b],
@@ -176,7 +176,7 @@ fn resolve_value_distinguishes_scalar_and_list() {
 
     let mut layer = Layer::new(LayerId(1));
     let mut spec = PrimSpec::default().with_field(field_x, 123_i64);
-    spec.fields.insert(
+    spec.set_field(
         field_classes,
         FieldValue::TokenListOp(ListOp {
             append: vec![class_a],
@@ -325,7 +325,7 @@ fn token_listop_append_reorders_duplicates() {
     let mut root_layer = Layer::new(LayerId(1));
     root_layer.sublayers = vec![LayerId(2)];
     let mut root_spec = PrimSpec::default();
-    root_spec.fields.insert(
+    root_spec.set_field(
         field_classes,
         FieldValue::TokenListOp(ListOp {
             append: vec![class_a],
@@ -337,7 +337,7 @@ fn token_listop_append_reorders_duplicates() {
 
     let mut sub_layer = Layer::new(LayerId(2));
     let mut sub_spec = PrimSpec::default();
-    sub_spec.fields.insert(
+    sub_spec.set_field(
         field_classes,
         FieldValue::TokenListOp(ListOp {
             explicit: Some(vec![class_a, class_b]),
@@ -373,7 +373,7 @@ fn token_listop_prepend_and_append_match_supplemental_list_editing_order() {
     let mut root_layer = Layer::new(LayerId(1));
     root_layer.sublayers = vec![LayerId(2), LayerId(3)];
     let mut root_spec = PrimSpec::default();
-    root_spec.fields.insert(
+    root_spec.set_field(
         field_targets,
         FieldValue::TokenListOp(ListOp {
             prepend: vec![root_prepend],
@@ -386,7 +386,7 @@ fn token_listop_prepend_and_append_match_supplemental_list_editing_order() {
 
     let mut sub1_layer = Layer::new(LayerId(2));
     let mut sub1_spec = PrimSpec::default();
-    sub1_spec.fields.insert(
+    sub1_spec.set_field(
         field_targets,
         FieldValue::TokenListOp(ListOp {
             prepend: vec![sub1_prepend],
@@ -399,7 +399,7 @@ fn token_listop_prepend_and_append_match_supplemental_list_editing_order() {
 
     let mut sub2_layer = Layer::new(LayerId(3));
     let mut sub2_spec = PrimSpec::default();
-    sub2_spec.fields.insert(
+    sub2_spec.set_field(
         field_targets,
         FieldValue::TokenListOp(ListOp {
             prepend: vec![sub2_prepend],
@@ -442,7 +442,7 @@ fn token_listop_prepend_composes_before_explicit() {
     // Sublayer (weaker): explicit apiSchemas = ["OriginalAPI"].
     let mut sub_layer = Layer::new(LayerId(2));
     let mut sub_spec = PrimSpec::default();
-    sub_spec.fields.insert(
+    sub_spec.set_field(
         api_schemas,
         FieldValue::TokenListOp(ListOp {
             explicit: Some(vec![original]),
@@ -456,7 +456,7 @@ fn token_listop_prepend_composes_before_explicit() {
     let mut root_layer = Layer::new(LayerId(1));
     root_layer.sublayers = vec![LayerId(2)];
     let mut root_spec = PrimSpec::default();
-    root_spec.fields.insert(
+    root_spec.set_field(
         api_schemas,
         FieldValue::TokenListOp(ListOp {
             prepend: vec![prepended],
@@ -617,7 +617,7 @@ fn time_samples_held_interpolation() {
 
     let mut layer = Layer::new(LayerId(1));
     let mut spec = PrimSpec::default();
-    spec.fields.insert(
+    spec.set_field(
         field,
         FieldValue::TimeSamples(vec![
             (1.0, Value::Double(10.0)),
@@ -691,7 +691,7 @@ fn time_samples_linear_interpolation() {
 
     let mut layer = Layer::new(LayerId(1));
     let mut spec = PrimSpec::default();
-    spec.fields.insert(
+    spec.set_field(
         field,
         FieldValue::TimeSamples(vec![
             (0.0, Value::Double(0.0)),
@@ -757,7 +757,7 @@ fn time_samples_linear_int_interpolation() {
 
     let mut layer = Layer::new(LayerId(1));
     let mut spec = PrimSpec::default();
-    spec.fields.insert(
+    spec.set_field(
         field,
         FieldValue::TimeSamples(vec![(0.0, Value::Int64(0)), (10.0, Value::Int64(100))]),
     );
@@ -786,7 +786,7 @@ fn time_samples_non_numeric_falls_back_to_held() {
 
     let mut layer = Layer::new(LayerId(1));
     let mut spec = PrimSpec::default();
-    spec.fields.insert(
+    spec.set_field(
         field,
         FieldValue::TimeSamples(vec![
             (1.0, Value::string("hello")),
@@ -820,7 +820,7 @@ fn time_samples_override_default_value() {
     let mut root = Layer::new(LayerId(1));
     root.sublayers = vec![LayerId(2)];
     let mut root_spec = PrimSpec::default();
-    root_spec.fields.insert(
+    root_spec.set_field(
         field,
         FieldValue::TimeSamples(vec![(1.0, Value::Double(10.0))]),
     );

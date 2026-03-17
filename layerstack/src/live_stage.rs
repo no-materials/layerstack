@@ -296,8 +296,7 @@ mod tests {
             prims: HashMap::new(),
         };
         let mut spec = PrimSpec::default();
-        spec.fields
-            .insert(field_x, FieldValue::Value(Value::Int64(42)));
+        spec.set_field(field_x, FieldValue::Value(Value::Int64(42)));
         layer.insert_prim(prim, spec);
         store.insert_layer(layer);
 
@@ -340,8 +339,7 @@ mod tests {
             prims: HashMap::new(),
         };
         let mut spec = PrimSpec::default();
-        spec.fields
-            .insert(field_x, FieldValue::Value(Value::Int64(1)));
+        spec.set_field(field_x, FieldValue::Value(Value::Int64(1)));
         layer.insert_prim(prim, spec);
         store.insert_layer(layer);
 
@@ -355,8 +353,7 @@ mod tests {
         {
             let layer = store.layers.get_mut(&LayerId(1)).unwrap();
             let spec = layer.prims.get_mut(&prim).unwrap();
-            spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int64(99)));
+            spec.set_field(field_x, FieldValue::Value(Value::Int64(99)));
         }
 
         // Notify and recompose.
@@ -426,9 +423,7 @@ mod tests {
             prims: HashMap::new(),
         };
         let mut q_spec = PrimSpec::default();
-        q_spec
-            .fields
-            .insert(field_x, FieldValue::Value(Value::Int64(10)));
+        q_spec.set_field(field_x, FieldValue::Value(Value::Int64(10)));
         ref_layer.insert_prim(prim_q, q_spec);
         store.insert_layer(ref_layer);
 
@@ -442,8 +437,7 @@ mod tests {
         {
             let layer = store.layers.get_mut(&LayerId(2)).unwrap();
             let spec = layer.prims.get_mut(&prim_q).unwrap();
-            spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int64(77)));
+            spec.set_field(field_x, FieldValue::Value(Value::Int64(77)));
         }
 
         live.notify_layer_edit(LayerId(2));
@@ -473,9 +467,7 @@ mod tests {
             prims: HashMap::new(),
         };
         let mut spec2 = PrimSpec::default();
-        spec2
-            .fields
-            .insert(field_x, FieldValue::Value(Value::Int64(10)));
+        spec2.set_field(field_x, FieldValue::Value(Value::Int64(10)));
         layer2.insert_prim(prim, spec2);
         store.insert_layer(layer2);
 
@@ -485,9 +477,7 @@ mod tests {
             prims: HashMap::new(),
         };
         let mut spec1 = PrimSpec::default();
-        spec1
-            .fields
-            .insert(field_x, FieldValue::Value(Value::Int64(20)));
+        spec1.set_field(field_x, FieldValue::Value(Value::Int64(20)));
         layer1.insert_prim(prim, spec1);
         store.insert_layer(layer1);
 
@@ -502,8 +492,7 @@ mod tests {
         {
             let layer = store.layers.get_mut(&LayerId(2)).unwrap();
             let spec = layer.prims.get_mut(&prim).unwrap();
-            spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int64(99)));
+            spec.set_field(field_x, FieldValue::Value(Value::Int64(99)));
         }
         live.notify_layer_edit(LayerId(2));
         let updated = live.recompose(&mut store);
@@ -518,8 +507,7 @@ mod tests {
         {
             let layer = store.layers.get_mut(&LayerId(1)).unwrap();
             let spec = layer.prims.get_mut(&prim).unwrap();
-            spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int64(55)));
+            spec.set_field(field_x, FieldValue::Value(Value::Int64(55)));
         }
         live.notify_layer_edit(LayerId(1));
         let updated = live.recompose(&mut store);
@@ -545,9 +533,7 @@ mod tests {
         };
         // /Class_C defines x = 42.
         let mut class_spec = PrimSpec::default();
-        class_spec
-            .fields
-            .insert(field_x, FieldValue::Value(Value::Int64(42)));
+        class_spec.set_field(field_x, FieldValue::Value(Value::Int64(42)));
         layer.insert_prim(class_c, class_spec);
         // /P inherits from /Class_C.
         let mut p_spec = PrimSpec::default();
@@ -566,8 +552,7 @@ mod tests {
         {
             let layer = store.layers.get_mut(&LayerId(1)).unwrap();
             let spec = layer.prims.get_mut(&class_c).unwrap();
-            spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int64(100)));
+            spec.set_field(field_x, FieldValue::Value(Value::Int64(100)));
         }
         live.notify_layer_edit(LayerId(1));
         let updated = live.recompose(&mut store);
@@ -599,9 +584,7 @@ mod tests {
             prims: HashMap::new(),
         };
         let mut a_spec = PrimSpec::default();
-        a_spec
-            .fields
-            .insert(field_x, FieldValue::Value(Value::Int64(1)));
+        a_spec.set_field(field_x, FieldValue::Value(Value::Int64(1)));
         layer1.insert_prim(prim_a, a_spec);
         store.insert_layer(layer1);
 
@@ -611,9 +594,7 @@ mod tests {
             prims: HashMap::new(),
         };
         let mut b_spec = PrimSpec::default();
-        b_spec
-            .fields
-            .insert(field_y, FieldValue::Value(Value::Int64(2)));
+        b_spec.set_field(field_y, FieldValue::Value(Value::Int64(2)));
         layer2.insert_prim(prim_b, b_spec);
         store.insert_layer(layer2);
 
@@ -623,14 +604,12 @@ mod tests {
         {
             let layer = store.layers.get_mut(&LayerId(1)).unwrap();
             let spec = layer.prims.get_mut(&prim_a).unwrap();
-            spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int64(11)));
+            spec.set_field(field_x, FieldValue::Value(Value::Int64(11)));
         }
         {
             let layer = store.layers.get_mut(&LayerId(2)).unwrap();
             let spec = layer.prims.get_mut(&prim_b).unwrap();
-            spec.fields
-                .insert(field_y, FieldValue::Value(Value::Int64(22)));
+            spec.set_field(field_y, FieldValue::Value(Value::Int64(22)));
         }
 
         // Batch notify both layers, then recompose once.
@@ -662,8 +641,7 @@ mod tests {
             prims: HashMap::new(),
         };
         let mut spec = PrimSpec::default();
-        spec.fields
-            .insert(field_x, FieldValue::Value(Value::Int64(1)));
+        spec.set_field(field_x, FieldValue::Value(Value::Int64(1)));
         layer.insert_prim(prim, spec);
         store.insert_layer(layer);
 
@@ -673,8 +651,7 @@ mod tests {
         {
             let layer = store.layers.get_mut(&LayerId(1)).unwrap();
             let spec = layer.prims.get_mut(&prim).unwrap();
-            spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int64(99)));
+            spec.set_field(field_x, FieldValue::Value(Value::Int64(99)));
         }
         live.notify_layer_edit(LayerId(1));
         let first = live.recompose(&mut store);
@@ -705,9 +682,7 @@ mod tests {
         };
         let mut p_spec = PrimSpec::default();
         p_spec.add_reference(Reference::new(LayerId(2), prim_q));
-        p_spec
-            .fields
-            .insert(field_x, FieldValue::Value(Value::Int64(1)));
+        p_spec.set_field(field_x, FieldValue::Value(Value::Int64(1)));
         root.insert_prim(prim_p, p_spec);
         store.insert_layer(root);
 
@@ -717,9 +692,7 @@ mod tests {
             prims: HashMap::new(),
         };
         let mut q_spec = PrimSpec::default();
-        q_spec
-            .fields
-            .insert(field_x, FieldValue::Value(Value::Int64(100)));
+        q_spec.set_field(field_x, FieldValue::Value(Value::Int64(100)));
         ref_layer.insert_prim(prim_q, q_spec);
         store.insert_layer(ref_layer);
 
@@ -729,8 +702,7 @@ mod tests {
         {
             let layer = store.layers.get_mut(&LayerId(2)).unwrap();
             let spec = layer.prims.get_mut(&prim_q).unwrap();
-            spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int64(200)));
+            spec.set_field(field_x, FieldValue::Value(Value::Int64(200)));
         }
 
         live.notify_layer_edit(LayerId(2));
@@ -759,15 +731,11 @@ mod tests {
             prims: HashMap::new(),
         };
         let mut a_spec = PrimSpec::default();
-        a_spec
-            .fields
-            .insert(field_x, FieldValue::Value(Value::Int64(1)));
+        a_spec.set_field(field_x, FieldValue::Value(Value::Int64(1)));
         layer.insert_prim(prim_a, a_spec);
 
         let mut b_spec = PrimSpec::default();
-        b_spec
-            .fields
-            .insert(field_x, FieldValue::Value(Value::Int64(2)));
+        b_spec.set_field(field_x, FieldValue::Value(Value::Int64(2)));
         layer.insert_prim(prim_b, b_spec);
         store.insert_layer(layer);
 
@@ -777,8 +745,7 @@ mod tests {
         {
             let layer = store.layers.get_mut(&LayerId(1)).unwrap();
             let spec = layer.prims.get_mut(&prim_a).unwrap();
-            spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int64(99)));
+            spec.set_field(field_x, FieldValue::Value(Value::Int64(99)));
         }
         live.notify_prim_edit(prim_a);
         let updated = live.recompose(&mut store);
@@ -812,15 +779,11 @@ mod tests {
             prims: HashMap::new(),
         };
         let mut a_spec = PrimSpec::default();
-        a_spec
-            .fields
-            .insert(field_x, FieldValue::Value(Value::Int64(1)));
+        a_spec.set_field(field_x, FieldValue::Value(Value::Int64(1)));
         layer.insert_prim(prim_a, a_spec);
 
         let mut b_spec = PrimSpec::default();
-        b_spec
-            .fields
-            .insert(field_x, FieldValue::Value(Value::Int64(2)));
+        b_spec.set_field(field_x, FieldValue::Value(Value::Int64(2)));
         layer.insert_prim(prim_b, b_spec);
         store.insert_layer(layer);
 
@@ -830,8 +793,7 @@ mod tests {
         {
             let layer = store.layers.get_mut(&LayerId(1)).unwrap();
             let spec = layer.prims.get_mut(&prim_a).unwrap();
-            spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int64(99)));
+            spec.set_field(field_x, FieldValue::Value(Value::Int64(99)));
         }
 
         // Use the targeted notification: only mark prim_a within layer 1.
@@ -868,9 +830,7 @@ mod tests {
             prims: HashMap::new(),
         };
         let mut a_spec = PrimSpec::default();
-        a_spec
-            .fields
-            .insert(field_x, FieldValue::Value(Value::Int64(1)));
+        a_spec.set_field(field_x, FieldValue::Value(Value::Int64(1)));
         layer1.insert_prim(prim_a, a_spec);
         store.insert_layer(layer1);
 
@@ -880,9 +840,7 @@ mod tests {
             prims: HashMap::new(),
         };
         let mut b_spec = PrimSpec::default();
-        b_spec
-            .fields
-            .insert(field_x, FieldValue::Value(Value::Int64(2)));
+        b_spec.set_field(field_x, FieldValue::Value(Value::Int64(2)));
         layer2.insert_prim(prim_b, b_spec);
         store.insert_layer(layer2);
 
@@ -913,8 +871,7 @@ mod tests {
         };
         for &(prim, val) in &[(prim_a, 1), (prim_b, 2), (prim_c, 3)] {
             let mut spec = PrimSpec::default();
-            spec.fields
-                .insert(field_x, FieldValue::Value(Value::Int64(val)));
+            spec.set_field(field_x, FieldValue::Value(Value::Int64(val)));
             layer.insert_prim(prim, spec);
         }
         store.insert_layer(layer);
@@ -928,14 +885,12 @@ mod tests {
                 .prims
                 .get_mut(&prim_a)
                 .unwrap()
-                .fields
-                .insert(field_x, FieldValue::Value(Value::Int64(10)));
+                .set_field(field_x, FieldValue::Value(Value::Int64(10)));
             layer
                 .prims
                 .get_mut(&prim_b)
                 .unwrap()
-                .fields
-                .insert(field_x, FieldValue::Value(Value::Int64(20)));
+                .set_field(field_x, FieldValue::Value(Value::Int64(20)));
         }
 
         live.notify_prim_edits(&[prim_a, prim_b]);

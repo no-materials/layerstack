@@ -17,7 +17,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use layerstack::doc::{
-    FieldValue, Layer, LayerId, PrimSpec, Reference, Specifier, Value, VariantSpec,
+    FieldValue, Layer, LayerId, PrimSpec, Reference, Specifier, Value, VariantSpec, get_field_mut,
+    insert_field_if_absent, set_field_vec,
 };
 use layerstack::interner::{TokenId, TokenInterner};
 use layerstack::listop::ListOp;
@@ -233,13 +234,15 @@ impl EmitCtx<'_> {
                 ast::PrimMeta::Kind(kind) => {
                     let key = self.tokens.intern("kind");
                     let val = self.tokens.intern(kind);
-                    spec.fields
-                        .insert(key, FieldValue::Value(Value::Token(val)));
+                    set_field_vec(&mut spec.fields, key, FieldValue::Value(Value::Token(val)));
                 }
                 ast::PrimMeta::Doc(doc) => {
                     let key = self.tokens.intern("documentation");
-                    spec.fields
-                        .insert(key, FieldValue::Value(Value::String(Arc::from(*doc))));
+                    set_field_vec(
+                        &mut spec.fields,
+                        key,
+                        FieldValue::Value(Value::String(Arc::from(*doc))),
+                    );
                 }
                 ast::PrimMeta::Custom(entry) if entry.key == "instanceable" => {
                     if let ast::MetadataValue::Value(ast::Value::Bool(b)) = &entry.value {
@@ -263,10 +266,10 @@ impl EmitCtx<'_> {
                             ast::ListOpKind::Delete => list_op.delete = items,
                             ast::ListOpKind::Explicit => unreachable!(),
                         }
-                        spec.fields.insert(key, FieldValue::TokenListOp(list_op));
+                        set_field_vec(&mut spec.fields, key, FieldValue::TokenListOp(list_op));
                     } else {
                         let val = self.convert_metadata_value(&entry.value);
-                        spec.fields.insert(key, FieldValue::Value(val));
+                        set_field_vec(&mut spec.fields, key, FieldValue::Value(val));
                     }
                 }
             }
@@ -281,10 +284,12 @@ impl EmitCtx<'_> {
         // Connection: stored as a PathListOp under the attribute name.
         if let Some(conn) = &attr.connection {
             let listop = self.emit_connection_listop(conn);
-            if let Some(FieldValue::PathListOp(existing)) = spec.fields.get_mut(&name_tok) {
+            if let Some(FieldValue::PathListOp(existing)) =
+                get_field_mut(&mut spec.fields, &name_tok)
+            {
                 merge_path_listop(existing, listop);
             } else {
-                spec.fields.insert(name_tok, FieldValue::PathListOp(listop));
+                set_field_vec(&mut spec.fields, name_tok, FieldValue::PathListOp(listop));
             }
             return;
         }
@@ -298,19 +303,17 @@ impl EmitCtx<'_> {
                     Some((s.time, self.convert_value(val, attr.type_name)))
                 })
                 .collect();
-            spec.fields.insert(name_tok, FieldValue::TimeSamples(ts));
+            set_field_vec(&mut spec.fields, name_tok, FieldValue::TimeSamples(ts));
             return;
         }
 
         // Default value.
         if let Some(val) = &attr.default {
             let converted = self.convert_value(val, attr.type_name);
-            spec.fields.insert(name_tok, FieldValue::Value(converted));
+            set_field_vec(&mut spec.fields, name_tok, FieldValue::Value(converted));
         } else {
             // Attribute declaration with no value — register as Null.
-            spec.fields
-                .entry(name_tok)
-                .or_insert(FieldValue::Value(Value::Null));
+            insert_field_if_absent(&mut spec.fields, name_tok, FieldValue::Value(Value::Null));
         }
     }
 
@@ -338,17 +341,21 @@ impl EmitCtx<'_> {
             }
 
             // Merge with existing if present.
-            if let Some(FieldValue::PathListOp(existing)) = spec.fields.get_mut(&name_tok) {
+            if let Some(FieldValue::PathListOp(existing)) =
+                get_field_mut(&mut spec.fields, &name_tok)
+            {
                 merge_path_listop(existing, listop);
             } else {
-                spec.fields.insert(name_tok, FieldValue::PathListOp(listop));
+                set_field_vec(&mut spec.fields, name_tok, FieldValue::PathListOp(listop));
             }
         } else {
             // Declaration with no targets — register as an empty PathListOp
             // so that inherited/composed targets can still be resolved.
-            spec.fields
-                .entry(name_tok)
-                .or_insert(FieldValue::PathListOp(ListOp::default()));
+            insert_field_if_absent(
+                &mut spec.fields,
+                name_tok,
+                FieldValue::PathListOp(ListOp::default()),
+            );
         }
     }
 
@@ -389,13 +396,15 @@ impl EmitCtx<'_> {
                         if let Some(conn) = &attr.connection {
                             let listop = self.emit_connection_listop(conn);
                             if let Some(FieldValue::PathListOp(existing)) =
-                                variant_spec.fields.get_mut(&attr_tok)
+                                get_field_mut(&mut variant_spec.fields, &attr_tok)
                             {
                                 merge_path_listop(existing, listop);
                             } else {
-                                variant_spec
-                                    .fields
-                                    .insert(attr_tok, FieldValue::PathListOp(listop));
+                                set_field_vec(
+                                    &mut variant_spec.fields,
+                                    attr_tok,
+                                    FieldValue::PathListOp(listop),
+                                );
                             }
                         } else if let Some(samples) = &attr.time_samples {
                             let ts: Vec<(f64, Value)> = samples
@@ -405,19 +414,24 @@ impl EmitCtx<'_> {
                                     Some((s.time, self.convert_value(val, attr.type_name)))
                                 })
                                 .collect();
-                            variant_spec
-                                .fields
-                                .insert(attr_tok, FieldValue::TimeSamples(ts));
+                            set_field_vec(
+                                &mut variant_spec.fields,
+                                attr_tok,
+                                FieldValue::TimeSamples(ts),
+                            );
                         } else if let Some(val) = &attr.default {
                             let converted = self.convert_value(val, attr.type_name);
-                            variant_spec
-                                .fields
-                                .insert(attr_tok, FieldValue::Value(converted));
+                            set_field_vec(
+                                &mut variant_spec.fields,
+                                attr_tok,
+                                FieldValue::Value(converted),
+                            );
                         } else {
-                            variant_spec
-                                .fields
-                                .entry(attr_tok)
-                                .or_insert(FieldValue::Value(Value::Null));
+                            insert_field_if_absent(
+                                &mut variant_spec.fields,
+                                attr_tok,
+                                FieldValue::Value(Value::Null),
+                            );
                         }
                     }
                     ast::PrimChild::Relationship(rel) => {
@@ -439,19 +453,22 @@ impl EmitCtx<'_> {
                                 ast::ListOpKind::Delete => listop.delete = path_ids,
                             }
                             if let Some(FieldValue::PathListOp(existing)) =
-                                variant_spec.fields.get_mut(&name_tok)
+                                get_field_mut(&mut variant_spec.fields, &name_tok)
                             {
                                 merge_path_listop(existing, listop);
                             } else {
-                                variant_spec
-                                    .fields
-                                    .insert(name_tok, FieldValue::PathListOp(listop));
+                                set_field_vec(
+                                    &mut variant_spec.fields,
+                                    name_tok,
+                                    FieldValue::PathListOp(listop),
+                                );
                             }
                         } else {
-                            variant_spec
-                                .fields
-                                .entry(name_tok)
-                                .or_insert(FieldValue::Value(Value::Null));
+                            insert_field_if_absent(
+                                &mut variant_spec.fields,
+                                name_tok,
+                                FieldValue::Value(Value::Null),
+                            );
                         }
                     }
                     ast::PrimChild::Prim(child_prim) => {
@@ -646,9 +663,11 @@ impl EmitCtx<'_> {
                         let attr_tok = self.tokens.intern(attr.name);
                         if let Some(val) = &attr.default {
                             let converted = self.convert_value(val, attr.type_name);
-                            variant_spec
-                                .fields
-                                .insert(attr_tok, FieldValue::Value(converted));
+                            set_field_vec(
+                                &mut variant_spec.fields,
+                                attr_tok,
+                                FieldValue::Value(converted),
+                            );
                         }
                     }
                     _ => {}
@@ -746,11 +765,11 @@ impl EmitCtx<'_> {
                     if let Some(conn) = &attr.connection {
                         let listop = self.emit_connection_listop(conn);
                         if let Some(FieldValue::PathListOp(existing)) =
-                            child_fields.get_mut(&attr_tok)
+                            get_field_mut(child_fields, &attr_tok)
                         {
                             merge_path_listop(existing, listop);
                         } else {
-                            child_fields.insert(attr_tok, FieldValue::PathListOp(listop));
+                            set_field_vec(child_fields, attr_tok, FieldValue::PathListOp(listop));
                         }
                     } else if let Some(samples) = &attr.time_samples {
                         let ts: Vec<(f64, Value)> = samples
@@ -760,14 +779,16 @@ impl EmitCtx<'_> {
                                 Some((s.time, self.convert_value(val, attr.type_name)))
                             })
                             .collect();
-                        child_fields.insert(attr_tok, FieldValue::TimeSamples(ts));
+                        set_field_vec(child_fields, attr_tok, FieldValue::TimeSamples(ts));
                     } else if let Some(val) = &attr.default {
                         let converted = self.convert_value(val, attr.type_name);
-                        child_fields.insert(attr_tok, FieldValue::Value(converted));
+                        set_field_vec(child_fields, attr_tok, FieldValue::Value(converted));
                     } else {
-                        child_fields
-                            .entry(attr_tok)
-                            .or_insert(FieldValue::Value(Value::Null));
+                        insert_field_if_absent(
+                            child_fields,
+                            attr_tok,
+                            FieldValue::Value(Value::Null),
+                        );
                     }
                 }
                 ast::PrimChild::Relationship(rel) => {
@@ -789,16 +810,18 @@ impl EmitCtx<'_> {
                             ast::ListOpKind::Delete => listop.delete = path_ids,
                         }
                         if let Some(FieldValue::PathListOp(existing)) =
-                            child_fields.get_mut(&name_tok)
+                            get_field_mut(child_fields, &name_tok)
                         {
                             merge_path_listop(existing, listop);
                         } else {
-                            child_fields.insert(name_tok, FieldValue::PathListOp(listop));
+                            set_field_vec(child_fields, name_tok, FieldValue::PathListOp(listop));
                         }
                     } else {
-                        child_fields
-                            .entry(name_tok)
-                            .or_insert(FieldValue::Value(Value::Null));
+                        insert_field_if_absent(
+                            child_fields,
+                            name_tok,
+                            FieldValue::Value(Value::Null),
+                        );
                     }
                 }
                 ast::PrimChild::Prim(grandchild) => {
@@ -1124,6 +1147,7 @@ mod tests {
 
     use alloc::vec;
 
+    use layerstack::doc::get_field;
     use layerstack::interner::TokenInterner;
     use layerstack::path::PathInterner;
 
@@ -1226,7 +1250,7 @@ def \"A\" {
         let spec = result.layer.prims.get(&a_id).unwrap();
         let x_tok = tokens.intern("x");
         assert_eq!(
-            spec.fields.get(&x_tok),
+            get_field(&spec.fields, &x_tok),
             Some(&FieldValue::Value(Value::Int(42)))
         );
     }
@@ -1240,7 +1264,7 @@ def \"A\" {
         let spec = result.layer.prims.get(&a_id).unwrap();
         let y_tok = tokens.intern("y");
         assert_eq!(
-            spec.fields.get(&y_tok),
+            get_field(&spec.fields, &y_tok),
             Some(&FieldValue::Value(Value::Double(2.5)))
         );
     }
@@ -1333,11 +1357,11 @@ def \"A\" {
         assert!(vs.variants.contains_key(&blue_tok));
         let r_tok = tokens.intern("r");
         assert_eq!(
-            vs.variants.get(&red_tok).unwrap().fields.get(&r_tok),
+            get_field(&vs.variants.get(&red_tok).unwrap().fields, &r_tok),
             Some(&FieldValue::Value(Value::Int(255)))
         );
         assert_eq!(
-            vs.variants.get(&blue_tok).unwrap().fields.get(&r_tok),
+            get_field(&vs.variants.get(&blue_tok).unwrap().fields, &r_tok),
             Some(&FieldValue::Value(Value::Int(0)))
         );
     }
@@ -1375,7 +1399,7 @@ def \"A\" {
         let a_id = paths.lookup(&a_path).unwrap();
         let spec = result.layer.prims.get(&a_id).unwrap();
         let x_tok = tokens.intern("x");
-        if let Some(FieldValue::TimeSamples(ts)) = spec.fields.get(&x_tok) {
+        if let Some(FieldValue::TimeSamples(ts)) = get_field(&spec.fields, &x_tok) {
             assert_eq!(ts.len(), 2);
             assert!((ts[0].0 - 1.0).abs() < 1e-10);
             assert_eq!(ts[0].1, Value::Float(10.0));
@@ -1395,7 +1419,7 @@ def \"A\" {
         let spec = result.layer.prims.get(&a_id).unwrap();
         let target_tok = tokens.intern("target");
         assert!(matches!(
-            spec.fields.get(&target_tok),
+            get_field(&spec.fields, &target_tok),
             Some(FieldValue::PathListOp(_))
         ));
     }
@@ -1429,11 +1453,11 @@ def \"A\" (
         let connect_key = tokens.intern("focalLength");
         assert!(
             matches!(
-                spec.fields.get(&connect_key),
+                get_field(&spec.fields, &connect_key),
                 Some(FieldValue::PathListOp(_))
             ),
             "expected connection PathListOp field, got {:?}",
-            spec.fields.get(&connect_key)
+            get_field(&spec.fields, &connect_key)
         );
     }
 
@@ -1446,7 +1470,7 @@ def \"A\" (
         let spec = result.layer.prims.get(&a_id).unwrap();
         let x_tok = tokens.intern("x");
         assert_eq!(
-            spec.fields.get(&x_tok),
+            get_field(&spec.fields, &x_tok),
             Some(&FieldValue::Value(Value::Blocked))
         );
     }
@@ -1803,7 +1827,7 @@ def Scope "D" (
         let spec = result.layer.prims.get(&card_id).expect("card prim");
 
         let api_tok = tokens.intern("apiSchemas");
-        let field = spec.fields.get(&api_tok).expect("apiSchemas field");
+        let field = get_field(&spec.fields, &api_tok).expect("apiSchemas field");
         match field {
             FieldValue::TokenListOp(listop) => {
                 assert!(listop.explicit.is_none(), "should not be explicit");
