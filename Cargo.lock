@@ -272,6 +272,7 @@ dependencies = [
  "layerstack",
  "layerstack_usda",
  "layerstack_usdc",
+ "layerstack_usdz",
  "serde",
  "serde_json",
 ]
@@ -299,6 +300,15 @@ dependencies = [
  "layerstack",
  "lz4_flex",
  "smallvec",
+]
+
+[[package]]
+name = "layerstack_usdz"
+version = "0.1.0"
+dependencies = [
+ "layerstack",
+ "layerstack_usda",
+ "layerstack_usdc",
 ]
 
 [[package]]
