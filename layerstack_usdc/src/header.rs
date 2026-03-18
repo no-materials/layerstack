@@ -31,6 +31,19 @@ pub struct Header {
 /// Validates the magic bytes, version range, and reserved fields.
 ///
 /// Spec: AOUSD Core §16.3.2.
+///
+/// ```
+/// use layerstack_usdc::header::parse_header;
+///
+/// let mut buf = [0u8; 32];
+/// buf[..8].copy_from_slice(b"PXR-USDC");
+/// buf[9] = 9; // version 0.9.0
+/// buf[16..24].copy_from_slice(&1024u64.to_le_bytes());
+///
+/// let hdr = parse_header(&buf).unwrap();
+/// assert_eq!(hdr.version, [0, 9, 0]);
+/// assert_eq!(hdr.toc_offset, 1024);
+/// ```
 pub fn parse_header(data: &[u8]) -> Result<Header, UsdcError> {
     if data.len() < 32 {
         return Err(UsdcError::UnexpectedEof {

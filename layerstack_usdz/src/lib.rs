@@ -68,6 +68,33 @@ pub struct UsdzResult {
 ///
 /// Spec: AOUSD Core §16.4.
 ///
+/// ```
+/// use layerstack::{
+///     AssetResolveError, AssetResolver, LayerId, ResolvedAsset,
+///     TokenInterner, PathInterner,
+/// };
+/// use layerstack_usdz::{read_usdz, UsdzError};
+///
+/// struct NoAssets;
+/// impl AssetResolver for NoAssets {
+///     fn resolve(&mut self, _: &str, _: Option<LayerId>, _: &mut TokenInterner,
+///                _: &mut PathInterner) -> Result<ResolvedAsset, AssetResolveError> {
+///         Err(AssetResolveError::NotFound)
+///     }
+///     fn resolved_path(&self, _: LayerId) -> Option<&str> { None }
+/// }
+///
+/// // Invalid data fails at the ZIP parsing stage.
+/// let result = read_usdz(
+///     b"not a zip",
+///     LayerId(1),
+///     &mut TokenInterner::default(),
+///     &mut PathInterner::default(),
+///     &mut NoAssets,
+/// );
+/// assert!(result.is_err());
+/// ```
+///
 /// [`Layer`]: layerstack::doc::Layer
 pub fn read_usdz(
     data: &[u8],

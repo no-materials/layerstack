@@ -25,6 +25,13 @@ const TABLE: [u32; 256] = {
 };
 
 /// Computes the CRC-32 checksum of `data`.
+///
+/// ```
+/// use layerstack_usdz::crc32::crc32;
+///
+/// assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+/// assert_eq!(crc32(b""), 0);
+/// ```
 pub fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFF_u32;
     for &byte in data {
