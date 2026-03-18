@@ -348,7 +348,12 @@ impl Stage {
             match &opinion.value {
                 FieldValue::Value(Value::Blocked) => return None,
                 FieldValue::TimeSamples(samples) => {
-                    let value = interpolate_samples(samples, time, interp);
+                    // Apply the opinion's accumulated layer offset to remap
+                    // the query time before interpolating.
+                    //
+                    // Spec: §12.3.2.1 (layer offset/scale remap time).
+                    let mapped_time = opinion.layer_offset.map_time(time);
+                    let value = interpolate_samples(samples, mapped_time, interp);
                     return value.map(|v| Resolved {
                         value: v,
                         provenance: self.provenance_for(field, opinion),
