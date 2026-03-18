@@ -10,6 +10,7 @@
 //! [`Layer`]: layerstack::doc::Layer
 //! [`PrimSpec`]: layerstack::doc::PrimSpec
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -663,13 +664,7 @@ impl AssembleCtx<'_> {
             CrateValue::AssetPath(p) => Value::Asset(Arc::from(p.as_str())),
             CrateValue::Specifier(v) => Value::Int(*v as i32),
             CrateValue::Variability(_) | CrateValue::Permission(_) => Value::Null,
-            CrateValue::Opaque { value_type, data } => {
-                let type_name = self.tokens.intern(value_type_name(*value_type));
-                Value::Opaque {
-                    type_name,
-                    bytes: Arc::from(data.as_slice()),
-                }
-            }
+            CrateValue::Opaque { value_type, data } => convert_math_value(*value_type, data),
             CrateValue::Array(items) => {
                 let vals: Vec<Value> = items.iter().map(|v| self.convert_crate_value(v)).collect();
                 Value::Array(vals)
@@ -1220,29 +1215,121 @@ fn parent_prim_path(path: &str) -> Option<String> {
 // Value type name helper
 // ---------------------------------------------------------------------------
 
-/// Returns a human-readable type name for a USDC [`ValueType`].
-fn value_type_name(vtype: ValueType) -> &'static str {
+// ---------------------------------------------------------------------------
+// Math type → Value conversion
+// ---------------------------------------------------------------------------
+
+/// Converts USDC opaque math bytes into a typed [`Value`] variant.
+///
+/// The byte layout is little-endian and matches the USDC binary format
+/// (§16.3.10). Vectors use the obvious element order; quaternions use
+/// (i, j, k, r) storage order per §6.3.
+fn convert_math_value(vtype: ValueType, data: &[u8]) -> Value {
     match vtype {
-        ValueType::Vec2d => "GfVec2d",
-        ValueType::Vec2f => "GfVec2f",
-        ValueType::Vec2h => "GfVec2h",
-        ValueType::Vec2i => "GfVec2i",
-        ValueType::Vec3d => "GfVec3d",
-        ValueType::Vec3f => "GfVec3f",
-        ValueType::Vec3h => "GfVec3h",
-        ValueType::Vec3i => "GfVec3i",
-        ValueType::Vec4d => "GfVec4d",
-        ValueType::Vec4f => "GfVec4f",
-        ValueType::Vec4h => "GfVec4h",
-        ValueType::Vec4i => "GfVec4i",
-        ValueType::Quatd => "GfQuatd",
-        ValueType::Quatf => "GfQuatf",
-        ValueType::Quath => "GfQuath",
-        ValueType::Matrix2d => "GfMatrix2d",
-        ValueType::Matrix3d => "GfMatrix3d",
-        ValueType::Matrix4d => "GfMatrix4d",
-        _ => "unknown",
+        // Vectors — f64
+        ValueType::Vec2d => Value::Vec2d(read_f64x2(data)),
+        ValueType::Vec3d => Value::Vec3d(read_f64x3(data)),
+        ValueType::Vec4d => Value::Vec4d(read_f64x4(data)),
+        // Vectors — f32
+        ValueType::Vec2f => Value::Vec2f(read_f32x2(data)),
+        ValueType::Vec3f => Value::Vec3f(read_f32x3(data)),
+        ValueType::Vec4f => Value::Vec4f(read_f32x4(data)),
+        // Vectors — half
+        ValueType::Vec2h => Value::Vec2h(read_u16x2(data)),
+        ValueType::Vec3h => Value::Vec3h(read_u16x3(data)),
+        ValueType::Vec4h => Value::Vec4h(read_u16x4(data)),
+        // Vectors — i32
+        ValueType::Vec2i => Value::Vec2i(read_i32x2(data)),
+        ValueType::Vec3i => Value::Vec3i(read_i32x3(data)),
+        ValueType::Vec4i => Value::Vec4i(read_i32x4(data)),
+        // Quaternions — (i, j, k, r) storage order
+        ValueType::Quatd => Value::Quatd(read_f64x4(data)),
+        ValueType::Quatf => Value::Quatf(read_f32x4(data)),
+        ValueType::Quath => Value::Quath(read_u16x4(data)),
+        // Matrices — row-major f64
+        ValueType::Matrix2d => Value::Matrix2d(Box::new(read_f64_array::<4>(data))),
+        ValueType::Matrix3d => Value::Matrix3d(Box::new(read_f64_array::<9>(data))),
+        ValueType::Matrix4d => Value::Matrix4d(Box::new(read_f64_array::<16>(data))),
+        _ => Value::Null,
     }
+}
+
+// --- Little-endian readers for math element arrays ---
+
+fn read_f64x2(d: &[u8]) -> [f64; 2] {
+    [f64_le(d, 0), f64_le(d, 1)]
+}
+
+fn read_f64x3(d: &[u8]) -> [f64; 3] {
+    [f64_le(d, 0), f64_le(d, 1), f64_le(d, 2)]
+}
+
+fn read_f64x4(d: &[u8]) -> [f64; 4] {
+    [f64_le(d, 0), f64_le(d, 1), f64_le(d, 2), f64_le(d, 3)]
+}
+
+fn read_f32x2(d: &[u8]) -> [f32; 2] {
+    [f32_le(d, 0), f32_le(d, 1)]
+}
+
+fn read_f32x3(d: &[u8]) -> [f32; 3] {
+    [f32_le(d, 0), f32_le(d, 1), f32_le(d, 2)]
+}
+
+fn read_f32x4(d: &[u8]) -> [f32; 4] {
+    [f32_le(d, 0), f32_le(d, 1), f32_le(d, 2), f32_le(d, 3)]
+}
+
+fn read_u16x2(d: &[u8]) -> [u16; 2] {
+    [u16_le(d, 0), u16_le(d, 1)]
+}
+
+fn read_u16x3(d: &[u8]) -> [u16; 3] {
+    [u16_le(d, 0), u16_le(d, 1), u16_le(d, 2)]
+}
+
+fn read_u16x4(d: &[u8]) -> [u16; 4] {
+    [u16_le(d, 0), u16_le(d, 1), u16_le(d, 2), u16_le(d, 3)]
+}
+
+fn read_i32x2(d: &[u8]) -> [i32; 2] {
+    [i32_le(d, 0), i32_le(d, 1)]
+}
+
+fn read_i32x3(d: &[u8]) -> [i32; 3] {
+    [i32_le(d, 0), i32_le(d, 1), i32_le(d, 2)]
+}
+
+fn read_i32x4(d: &[u8]) -> [i32; 4] {
+    [i32_le(d, 0), i32_le(d, 1), i32_le(d, 2), i32_le(d, 3)]
+}
+
+fn read_f64_array<const N: usize>(d: &[u8]) -> [f64; N] {
+    let mut out = [0.0_f64; N];
+    for (i, val) in out.iter_mut().enumerate() {
+        *val = f64_le(d, i);
+    }
+    out
+}
+
+fn f64_le(d: &[u8], idx: usize) -> f64 {
+    let off = idx * 8;
+    f64::from_le_bytes(d[off..off + 8].try_into().unwrap_or([0; 8]))
+}
+
+fn f32_le(d: &[u8], idx: usize) -> f32 {
+    let off = idx * 4;
+    f32::from_le_bytes(d[off..off + 4].try_into().unwrap_or([0; 4]))
+}
+
+fn u16_le(d: &[u8], idx: usize) -> u16 {
+    let off = idx * 2;
+    u16::from_le_bytes(d[off..off + 2].try_into().unwrap_or([0; 2]))
+}
+
+fn i32_le(d: &[u8], idx: usize) -> i32 {
+    let off = idx * 4;
+    i32::from_le_bytes(d[off..off + 4].try_into().unwrap_or([0; 4]))
 }
 
 // ---------------------------------------------------------------------------

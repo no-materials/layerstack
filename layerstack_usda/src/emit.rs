@@ -11,6 +11,7 @@
 //! [`Layer`]: layerstack::Layer
 //! [`PrimSpec`]: layerstack::PrimSpec
 
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -1031,11 +1032,25 @@ impl EmitCtx<'_> {
                     .collect();
                 Value::Dictionary(dict_entries)
             }
-            ast::Value::Tuple(items) | ast::Value::Array(items) => {
+            ast::Value::Tuple(items) => {
                 let elem_hint = element_type_hint(type_hint);
+                if let Some(v) = self.try_convert_dimensioned(items, type_hint, elem_hint) {
+                    v
+                } else {
+                    let elements: Vec<Value> = items
+                        .iter()
+                        .map(|v| self.convert_value(v, elem_hint))
+                        .collect();
+                    Value::Array(elements)
+                }
+            }
+            ast::Value::Array(items) => {
+                // For array types like "float3[]", pass "float3" (not "float")
+                // so inner tuples are recognized as dimensioned types.
+                let arr_elem_hint = type_hint.strip_suffix("[]").unwrap_or(type_hint);
                 let elements: Vec<Value> = items
                     .iter()
-                    .map(|v| self.convert_value(v, elem_hint))
+                    .map(|v| self.convert_value(v, arr_elem_hint))
                     .collect();
                 Value::Array(elements)
             }
@@ -1084,6 +1099,92 @@ impl EmitCtx<'_> {
         self.resolver
             .resolve(asset_path, Some(self.layer_id), self.tokens, self.paths)
             .ok()
+    }
+
+    /// Tries to convert a tuple into a typed dimensioned [`Value`] (§6.3).
+    ///
+    /// Returns `None` if `type_hint` is not a recognized dimensioned type,
+    /// letting the caller fall through to the generic `Value::Array` path.
+    fn try_convert_dimensioned(
+        &mut self,
+        items: &[ast::Value<'_>],
+        type_hint: &str,
+        elem_hint: &str,
+    ) -> Option<Value> {
+        // Strip array suffix for matching: "float3[]" → "float3".
+        let base = type_hint.strip_suffix("[]").unwrap_or(type_hint);
+        match base {
+            // Vectors — f64
+            "double2" => Some(Value::Vec2d(extract_f64s::<2>(items))),
+            "double3" => Some(Value::Vec3d(extract_f64s::<3>(items))),
+            "double4" => Some(Value::Vec4d(extract_f64s::<4>(items))),
+            // Vectors — f32
+            "float2" => Some(Value::Vec2f(extract_f32s::<2>(items))),
+            "float3" => Some(Value::Vec3f(extract_f32s::<3>(items))),
+            "float4" => Some(Value::Vec4f(extract_f32s::<4>(items))),
+            // Vectors — half
+            "half2" => Some(Value::Vec2h(extract_halves::<2>(items))),
+            "half3" => Some(Value::Vec3h(extract_halves::<3>(items))),
+            "half4" => Some(Value::Vec4h(extract_halves::<4>(items))),
+            // Vectors — i32
+            "int2" => Some(Value::Vec2i(extract_i32s::<2>(items))),
+            "int3" => Some(Value::Vec3i(extract_i32s::<3>(items))),
+            "int4" => Some(Value::Vec4i(extract_i32s::<4>(items))),
+            // Matrices — f64
+            "matrix2d" => Some(Value::Matrix2d(Box::new(extract_matrix_f64::<4>(items)))),
+            "matrix3d" => Some(Value::Matrix3d(Box::new(extract_matrix_f64::<9>(items)))),
+            "matrix4d" => Some(Value::Matrix4d(Box::new(extract_matrix_f64::<16>(items)))),
+            // Quaternions — stored as (i, j, k, r) but authored as (r, i, j, k)
+            // in USDA text per §16.3.10.22.
+            "quatd" => {
+                let v = extract_f64s::<4>(items);
+                Some(Value::Quatd([v[1], v[2], v[3], v[0]]))
+            }
+            "quatf" => {
+                let v = extract_f32s::<4>(items);
+                Some(Value::Quatf([v[1], v[2], v[3], v[0]]))
+            }
+            "quath" => {
+                let v = extract_halves::<4>(items);
+                Some(Value::Quath([v[1], v[2], v[3], v[0]]))
+            }
+            // Semantic aliases (§6.5) — same element layout, different type name.
+            _ if is_semantic_vec_alias(base, 'f') => {
+                let n = semantic_component_count(base);
+                match n {
+                    2 => Some(Value::Vec2f(extract_f32s::<2>(items))),
+                    3 => Some(Value::Vec3f(extract_f32s::<3>(items))),
+                    4 => Some(Value::Vec4f(extract_f32s::<4>(items))),
+                    _ => None,
+                }
+            }
+            _ if is_semantic_vec_alias(base, 'd') => {
+                let n = semantic_component_count(base);
+                match n {
+                    2 => Some(Value::Vec2d(extract_f64s::<2>(items))),
+                    3 => Some(Value::Vec3d(extract_f64s::<3>(items))),
+                    4 => Some(Value::Vec4d(extract_f64s::<4>(items))),
+                    _ => None,
+                }
+            }
+            _ if is_semantic_vec_alias(base, 'h') => {
+                let n = semantic_component_count(base);
+                match n {
+                    2 => Some(Value::Vec2h(extract_halves::<2>(items))),
+                    3 => Some(Value::Vec3h(extract_halves::<3>(items))),
+                    4 => Some(Value::Vec4h(extract_halves::<4>(items))),
+                    _ => None,
+                }
+            }
+            _ => {
+                // Not a recognized dimensioned type — fall through to
+                // generic array handling. This also covers nested arrays of
+                // tuples (e.g. `float3[]`), where the inner tuples will be
+                // converted individually via recursive `convert_value` calls.
+                let _ = elem_hint;
+                None
+            }
+        }
     }
 }
 
@@ -1220,6 +1321,120 @@ fn half_from_f64(v: f64) -> u16 {
             (sign | ((new_exp as u32) << 10) | (mantissa >> 13)) as u16
         }
     }
+}
+
+// ── Dimensioned type helpers (§6.3) ─────────────────────────────────────
+
+/// Extracts `N` f64 values from AST value nodes.
+fn extract_f64s<const N: usize>(items: &[ast::Value<'_>]) -> [f64; N] {
+    let mut out = [0.0_f64; N];
+    for (i, val) in out.iter_mut().enumerate() {
+        *val = items.get(i).map_or(0.0, ast_to_f64);
+    }
+    out
+}
+
+/// Extracts `N` f32 values from AST value nodes.
+fn extract_f32s<const N: usize>(items: &[ast::Value<'_>]) -> [f32; N] {
+    let mut out = [0.0_f32; N];
+    for (i, val) in out.iter_mut().enumerate() {
+        *val = items.get(i).map_or(0.0, |v| ast_to_f64(v) as f32);
+    }
+    out
+}
+
+/// Extracts `N` half values (as raw u16 bits) from AST value nodes.
+fn extract_halves<const N: usize>(items: &[ast::Value<'_>]) -> [u16; N] {
+    let mut out = [0_u16; N];
+    for (i, val) in out.iter_mut().enumerate() {
+        *val = items.get(i).map_or(0, |v| half_from_f64(ast_to_f64(v)));
+    }
+    out
+}
+
+/// Extracts `N` i32 values from AST value nodes.
+fn extract_i32s<const N: usize>(items: &[ast::Value<'_>]) -> [i32; N] {
+    let mut out = [0_i32; N];
+    for (i, val) in out.iter_mut().enumerate() {
+        *val = items.get(i).map_or(0, ast_to_i32);
+    }
+    out
+}
+
+/// Extracts `N` f64 values from a matrix tuple-of-tuples or flat tuple.
+///
+/// USDA matrices are authored as nested tuples:
+///   `((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))`
+/// Each element is either a `Tuple` (nested row) or a scalar (flat).
+fn extract_matrix_f64<const N: usize>(items: &[ast::Value<'_>]) -> [f64; N] {
+    let mut out = [0.0_f64; N];
+    let mut idx = 0;
+    for item in items {
+        match item {
+            ast::Value::Tuple(row) => {
+                for elem in row {
+                    if idx < N {
+                        out[idx] = ast_to_f64(elem);
+                        idx += 1;
+                    }
+                }
+            }
+            _ => {
+                if idx < N {
+                    out[idx] = ast_to_f64(item);
+                    idx += 1;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Converts an AST value node to f64 (best-effort).
+fn ast_to_f64(v: &ast::Value<'_>) -> f64 {
+    match v {
+        ast::Value::Number(n) => *n,
+        ast::Value::Int(n) => *n as f64,
+        _ => 0.0,
+    }
+}
+
+/// Converts an AST value node to i32 (best-effort).
+fn ast_to_i32(v: &ast::Value<'_>) -> i32 {
+    match v {
+        ast::Value::Int(n) => *n as i32,
+        ast::Value::Number(n) => *n as i32,
+        _ => 0,
+    }
+}
+
+/// Returns `true` if `name` is a semantic type alias (§6.5) ending with
+/// precision suffix `p` ('f', 'd', or 'h').
+///
+/// Semantic aliases: `color3f`, `color4f`, `normal3f`, `point3f`,
+/// `vector3f`, `texCoord2f`, `texCoord3f`, `frame4d`, etc.
+fn is_semantic_vec_alias(name: &str, precision: char) -> bool {
+    if !name.ends_with(precision) {
+        return false;
+    }
+    name.starts_with("color")
+        || name.starts_with("normal")
+        || name.starts_with("point")
+        || name.starts_with("vector")
+        || name.starts_with("texCoord")
+        || name.starts_with("frame")
+}
+
+/// Extracts the component count from a semantic alias name.
+///
+/// E.g., `"color3f"` → 3, `"texCoord2f"` → 2, `"frame4d"` → 4.
+fn semantic_component_count(name: &str) -> usize {
+    // The digit is always the second-to-last character.
+    name.chars()
+        .rev()
+        .nth(1)
+        .and_then(|c| c.to_digit(10))
+        .unwrap_or(0) as usize
 }
 
 // ── ListOp merge helpers ────────────────────────────────────────────────
@@ -2055,13 +2270,10 @@ def \"A\" {
         let pos_tok = tokens.intern("pos");
         let field = get_field(&spec.fields, &pos_tok).expect("pos field");
         match field {
-            FieldValue::Value(Value::Array(items)) => {
-                assert_eq!(items.len(), 3);
-                assert_eq!(items[0], Value::Float(1.0));
-                assert_eq!(items[1], Value::Float(2.0));
-                assert_eq!(items[2], Value::Float(3.0));
+            FieldValue::Value(Value::Vec3f(v)) => {
+                assert_eq!(*v, [1.0_f32, 2.0, 3.0]);
             }
-            other => panic!("expected Array, got {:?}", other),
+            other => panic!("expected Vec3f, got {:?}", other),
         }
     }
 
@@ -2098,15 +2310,10 @@ def \"A\" {
         match field {
             FieldValue::Value(Value::Array(items)) => {
                 assert_eq!(items.len(), 2);
-                match &items[0] {
-                    Value::Array(inner) => {
-                        assert_eq!(inner.len(), 3);
-                        assert_eq!(inner[0], Value::Float(1.0));
-                    }
-                    other => panic!("expected nested Array, got {:?}", other),
-                }
+                assert_eq!(items[0], Value::Vec3f([1.0, 2.0, 3.0]));
+                assert_eq!(items[1], Value::Vec3f([4.0, 5.0, 6.0]));
             }
-            other => panic!("expected Array, got {:?}", other),
+            other => panic!("expected Array of Vec3f, got {:?}", other),
         }
     }
 
@@ -2125,5 +2332,79 @@ def \"A\" {
             }
             other => panic!("expected empty Array, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn emit_double3() {
+        let src = "#usda 1.0\ndef \"A\" {\n    double3 pos = (1.5, 2.5, 3.5)\n}\n";
+        let (result, mut tokens, _paths) = emit_source(src);
+        let a_path = Path::parse_absolute("/A", &mut tokens).unwrap();
+        let a_id = _paths.lookup(&a_path).expect("/A");
+        let spec = result.layer.prims.get(&a_id).unwrap();
+        let pos_tok = tokens.intern("pos");
+        let field = get_field(&spec.fields, &pos_tok).expect("pos field");
+        assert_eq!(*field, FieldValue::Value(Value::Vec3d([1.5, 2.5, 3.5])));
+    }
+
+    #[test]
+    fn emit_int2() {
+        let src = "#usda 1.0\ndef \"A\" {\n    int2 v = (10, 20)\n}\n";
+        let (result, mut tokens, _paths) = emit_source(src);
+        let a_path = Path::parse_absolute("/A", &mut tokens).unwrap();
+        let a_id = _paths.lookup(&a_path).expect("/A");
+        let spec = result.layer.prims.get(&a_id).unwrap();
+        let v_tok = tokens.intern("v");
+        let field = get_field(&spec.fields, &v_tok).expect("v field");
+        assert_eq!(*field, FieldValue::Value(Value::Vec2i([10, 20])));
+    }
+
+    #[test]
+    fn emit_matrix4d() {
+        let src = "#usda 1.0\ndef \"A\" {\n    matrix4d xform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))\n}\n";
+        let (result, mut tokens, _paths) = emit_source(src);
+        let a_path = Path::parse_absolute("/A", &mut tokens).unwrap();
+        let a_id = _paths.lookup(&a_path).expect("/A");
+        let spec = result.layer.prims.get(&a_id).unwrap();
+        let xf_tok = tokens.intern("xform");
+        let field = get_field(&spec.fields, &xf_tok).expect("xform field");
+        let mut expected = [0.0_f64; 16];
+        expected[0] = 1.0;
+        expected[5] = 1.0;
+        expected[10] = 1.0;
+        expected[15] = 1.0;
+        assert_eq!(
+            *field,
+            FieldValue::Value(Value::Matrix4d(Box::new(expected)))
+        );
+    }
+
+    #[test]
+    fn emit_color3f_semantic_alias() {
+        let src = "#usda 1.0\ndef \"A\" {\n    color3f primvars:displayColor = (1, 0, 0)\n}\n";
+        let (result, mut tokens, _paths) = emit_source(src);
+        let a_path = Path::parse_absolute("/A", &mut tokens).unwrap();
+        let a_id = _paths.lookup(&a_path).expect("/A");
+        let spec = result.layer.prims.get(&a_id).unwrap();
+        let c_tok = tokens.intern("primvars:displayColor");
+        let field = get_field(&spec.fields, &c_tok).expect("displayColor field");
+        assert_eq!(*field, FieldValue::Value(Value::Vec3f([1.0, 0.0, 0.0])));
+    }
+
+    #[test]
+    fn emit_quatf() {
+        // USDA text order: (r, i, j, k) = (1.0, 0.0, 0.0, 0.0)
+        // Storage order: [i, j, k, r] = [0.0, 0.0, 0.0, 1.0]
+        let src = "#usda 1.0\ndef \"A\" {\n    quatf rot = (1.0, 0.0, 0.0, 0.0)\n}\n";
+        let (result, mut tokens, _paths) = emit_source(src);
+        let a_path = Path::parse_absolute("/A", &mut tokens).unwrap();
+        let a_id = _paths.lookup(&a_path).expect("/A");
+        let spec = result.layer.prims.get(&a_id).unwrap();
+        let rot_tok = tokens.intern("rot");
+        let field = get_field(&spec.fields, &rot_tok).expect("rot field");
+        // Storage is [i, j, k, r]; from (r=1, i=0, j=0, k=0) → [0, 0, 0, 1].
+        assert_eq!(
+            *field,
+            FieldValue::Value(Value::Quatf([0.0, 0.0, 0.0, 1.0]))
+        );
     }
 }

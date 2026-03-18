@@ -3,7 +3,7 @@
 //! Spec: AOUSD Core §6–§7 (scene description data model and opinions), plus §10
 //! for arc-related fields (variants/references).
 
-use alloc::{string::String, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::fmt;
 
 use hashbrown::HashMap;
@@ -36,12 +36,11 @@ pub enum Specifier {
 
 /// A plain value that can be resolved by the kernel.
 ///
-/// Covers all scalar types from AOUSD Core §6.2. Domain-specific compound
-/// types (vectors, matrices, quaternions) should typically be encoded as
-/// `Opaque` values in a higher-level profile crate.
+/// Covers scalar types (§6.2) and dimensioned types (§6.3): vectors,
+/// matrices, and quaternions.
 ///
-/// Spec: AOUSD Core §6.2 (scene description data types), §16.3.10 (value
-/// type encoding).
+/// Spec: AOUSD Core §6.2–§6.3 (scene description data types), §16.3.10
+/// (value type encoding).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     /// No value.
@@ -82,6 +81,57 @@ pub enum Value {
     ///
     /// Spec: §6.2.
     TimeCode(f64),
+
+    // ── Vectors (§6.3) ─────────────────────────────────────────────────
+    //
+    // Row vectors that pre-multiply matrices. Stored inline.
+    /// 2-component `f64` vector (`double2`). Spec: §6.3.
+    Vec2d([f64; 2]),
+    /// 3-component `f64` vector (`double3`). Spec: §6.3.
+    Vec3d([f64; 3]),
+    /// 4-component `f64` vector (`double4`). Spec: §6.3.
+    Vec4d([f64; 4]),
+    /// 2-component `f32` vector (`float2`). Spec: §6.3.
+    Vec2f([f32; 2]),
+    /// 3-component `f32` vector (`float3`). Spec: §6.3.
+    Vec3f([f32; 3]),
+    /// 4-component `f32` vector (`float4`). Spec: §6.3.
+    Vec4f([f32; 4]),
+    /// 2-component half vector (`half2`), stored as raw bits. Spec: §6.3.
+    Vec2h([u16; 2]),
+    /// 3-component half vector (`half3`), stored as raw bits. Spec: §6.3.
+    Vec3h([u16; 3]),
+    /// 4-component half vector (`half4`), stored as raw bits. Spec: §6.3.
+    Vec4h([u16; 4]),
+    /// 2-component `i32` vector (`int2`). Spec: §6.3.
+    Vec2i([i32; 2]),
+    /// 3-component `i32` vector (`int3`). Spec: §6.3.
+    Vec3i([i32; 3]),
+    /// 4-component `i32` vector (`int4`). Spec: §6.3.
+    Vec4i([i32; 4]),
+
+    // ── Matrices (§6.3) ────────────────────────────────────────────────
+    //
+    // Row-major, `f64` only. Translations live in the last row.
+    // Boxed to avoid bloating the enum (matrix4d = 128 bytes).
+    /// 2×2 `f64` matrix (`matrix2d`), row-major. Spec: §6.3.
+    Matrix2d(Box<[f64; 4]>),
+    /// 3×3 `f64` matrix (`matrix3d`), row-major. Spec: §6.3.
+    Matrix3d(Box<[f64; 9]>),
+    /// 4×4 `f64` matrix (`matrix4d`), row-major. Spec: §6.3.
+    Matrix4d(Box<[f64; 16]>),
+
+    // ── Quaternions (§6.3) ─────────────────────────────────────────────
+    //
+    // Storage order is (imaginary, real) = (i, j, k, r).
+    // Display order per §16.3.10.22 is (r, i, j, k).
+    /// `f64` quaternion (`quatd`), stored as `[i, j, k, r]`. Spec: §6.3.
+    Quatd([f64; 4]),
+    /// `f32` quaternion (`quatf`), stored as `[i, j, k, r]`. Spec: §6.3.
+    Quatf([f32; 4]),
+    /// Half quaternion (`quath`), stored as `[i, j, k, r]` in raw bits. Spec: §6.3.
+    Quath([u16; 4]),
+
     /// Opaque bytes tagged with a type name.
     Opaque {
         /// The (interned) type name for these bytes.
@@ -133,6 +183,45 @@ impl fmt::Display for Value {
             Self::Token(v) => write!(f, "token({v:?})"),
             Self::Asset(v) => write!(f, "@{v}@"),
             Self::TimeCode(v) => write!(f, "{v}"),
+            // Vectors
+            Self::Vec2d(v) => write!(f, "({}, {})", v[0], v[1]),
+            Self::Vec3d(v) => write!(f, "({}, {}, {})", v[0], v[1], v[2]),
+            Self::Vec4d(v) => write!(f, "({}, {}, {}, {})", v[0], v[1], v[2], v[3]),
+            Self::Vec2f(v) => write!(f, "({}, {})", v[0], v[1]),
+            Self::Vec3f(v) => write!(f, "({}, {}, {})", v[0], v[1], v[2]),
+            Self::Vec4f(v) => write!(f, "({}, {}, {}, {})", v[0], v[1], v[2], v[3]),
+            Self::Vec2h(v) => write!(f, "(half(0x{:04x}), half(0x{:04x}))", v[0], v[1]),
+            Self::Vec3h(v) => {
+                write!(
+                    f,
+                    "(half(0x{:04x}), half(0x{:04x}), half(0x{:04x}))",
+                    v[0], v[1], v[2]
+                )
+            }
+            Self::Vec4h(v) => {
+                write!(
+                    f,
+                    "(half(0x{:04x}), half(0x{:04x}), half(0x{:04x}), half(0x{:04x}))",
+                    v[0], v[1], v[2], v[3]
+                )
+            }
+            Self::Vec2i(v) => write!(f, "({}, {})", v[0], v[1]),
+            Self::Vec3i(v) => write!(f, "({}, {}, {})", v[0], v[1], v[2]),
+            Self::Vec4i(v) => write!(f, "({}, {}, {}, {})", v[0], v[1], v[2], v[3]),
+            // Matrices (row-major flat array)
+            Self::Matrix2d(m) => fmt_matrix(f, m.as_slice(), 2),
+            Self::Matrix3d(m) => fmt_matrix(f, m.as_slice(), 3),
+            Self::Matrix4d(m) => fmt_matrix(f, m.as_slice(), 4),
+            // Quaternions — display order is (r, i, j, k) per §16.3.10.22.
+            Self::Quatd(q) => write!(f, "({}, {}, {}, {})", q[3], q[0], q[1], q[2]),
+            Self::Quatf(q) => write!(f, "({}, {}, {}, {})", q[3], q[0], q[1], q[2]),
+            Self::Quath(q) => {
+                write!(
+                    f,
+                    "(half(0x{:04x}), half(0x{:04x}), half(0x{:04x}), half(0x{:04x}))",
+                    q[3], q[0], q[1], q[2]
+                )
+            }
             Self::Opaque { type_name, bytes } => {
                 write!(f, "opaque({type_name:?}, {} bytes)", bytes.len())
             }
@@ -159,6 +248,25 @@ impl fmt::Display for Value {
             }
         }
     }
+}
+
+/// Formats a row-major matrix as nested tuples: `((r0c0, r0c1), (r1c0, r1c1))`.
+fn fmt_matrix(f: &mut fmt::Formatter<'_>, m: &[f64], cols: usize) -> fmt::Result {
+    write!(f, "(")?;
+    for row in 0..cols {
+        if row > 0 {
+            write!(f, ", ")?;
+        }
+        write!(f, "(")?;
+        for col in 0..cols {
+            if col > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}", m[row * cols + col])?;
+        }
+        write!(f, ")")?;
+    }
+    write!(f, ")")
 }
 
 impl Value {
@@ -933,6 +1041,8 @@ impl LayerStore for InMemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::boxed::Box;
+    use alloc::format;
     use alloc::sync::Arc;
     use alloc::vec;
 
@@ -1126,5 +1236,82 @@ mod tests {
         };
         assert_eq!(lo.compose(LayerOffset::IDENTITY), lo);
         assert_eq!(LayerOffset::IDENTITY.compose(lo), lo);
+    }
+
+    // ── Dimensioned types (§6.3) ────────────────────────────────────
+
+    #[test]
+    fn vec3f_construction_and_display() {
+        let v = Value::Vec3f([1.0, 2.0, 3.0]);
+        assert_eq!(format!("{v}"), "(1, 2, 3)");
+    }
+
+    #[test]
+    fn vec2d_construction_and_display() {
+        let v = Value::Vec2d([1.5, -2.5]);
+        assert_eq!(format!("{v}"), "(1.5, -2.5)");
+    }
+
+    #[test]
+    fn vec4i_construction_and_display() {
+        let v = Value::Vec4i([1, 2, 3, 4]);
+        assert_eq!(format!("{v}"), "(1, 2, 3, 4)");
+    }
+
+    #[test]
+    fn matrix2d_display() {
+        let m = Value::Matrix2d(Box::new([1.0, 0.0, 0.0, 1.0]));
+        assert_eq!(format!("{m}"), "((1, 0), (0, 1))");
+    }
+
+    #[test]
+    fn matrix4d_identity_display() {
+        let mut elems = [0.0_f64; 16];
+        elems[0] = 1.0;
+        elems[5] = 1.0;
+        elems[10] = 1.0;
+        elems[15] = 1.0;
+        let m = Value::Matrix4d(Box::new(elems));
+        let s = format!("{m}");
+        assert!(s.starts_with("((1, 0, 0, 0)"));
+        assert!(s.ends_with("(0, 0, 0, 1))"));
+    }
+
+    #[test]
+    fn quatf_display_is_rijkr_order() {
+        // Storage: [i, j, k, r] = [0.1, 0.2, 0.3, 0.9]
+        // Display: (r, i, j, k) = (0.9, 0.1, 0.2, 0.3)
+        let q = Value::Quatf([0.1, 0.2, 0.3, 0.9]);
+        let s = format!("{q}");
+        assert!(s.starts_with("(0.9,"));
+    }
+
+    #[test]
+    fn vec3f_equality() {
+        assert_eq!(Value::Vec3f([1.0, 2.0, 3.0]), Value::Vec3f([1.0, 2.0, 3.0]));
+        assert_ne!(Value::Vec3f([1.0, 2.0, 3.0]), Value::Vec3f([1.0, 2.0, 4.0]));
+    }
+
+    #[test]
+    fn vec3f_clone() {
+        let v = Value::Vec3f([1.0, 2.0, 3.0]);
+        let v2 = v.clone();
+        assert_eq!(v, v2);
+    }
+
+    #[test]
+    fn matrix4d_clone() {
+        let m = Value::Matrix4d(Box::new([1.0; 16]));
+        let m2 = m.clone();
+        assert_eq!(m, m2);
+    }
+
+    #[test]
+    fn array_of_vec3f() {
+        let arr = Value::Array(vec![
+            Value::Vec3f([1.0, 2.0, 3.0]),
+            Value::Vec3f([4.0, 5.0, 6.0]),
+        ]);
+        assert_eq!(format!("{arr}"), "[(1, 2, 3), (4, 5, 6)]");
     }
 }
