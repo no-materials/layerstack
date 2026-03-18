@@ -12,7 +12,7 @@ use core::cmp::Ordering;
 use hashbrown::HashMap;
 
 use crate::{
-    doc::{FieldValue, LayerId},
+    doc::{FieldValue, LayerId, LayerOffset},
     interner::TokenId,
     path::PathId,
 };
@@ -154,6 +154,8 @@ pub struct Opinion {
     pub field: TokenId,
     /// The authored value.
     pub value: FieldValue,
+    /// Accumulated layer offset from all arcs leading to this opinion (§12.3.2.1).
+    pub layer_offset: LayerOffset,
 }
 
 /// A per-prim composition result, keyed by field token.

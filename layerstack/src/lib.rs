@@ -39,9 +39,10 @@ pub mod live_stage;
 pub use asset::{AssetResolveError, AssetResolver, ResolvedAsset};
 pub use dependency_map::ArcDependency;
 pub use doc::{
-    FieldEntry, FieldValue, InMemoryStore, InterpolationType, Layer, LayerId, PrimSpec, Reference,
-    Specifier, Value, VariantSetSpec, VariantSpec, combine_dictionaries, combine_dictionary_chain,
-    get_field, get_field_mut, insert_field_if_absent, set_field_vec,
+    FieldEntry, FieldValue, InMemoryStore, InterpolationType, Layer, LayerId, LayerOffset,
+    PrimSpec, Reference, Specifier, SublayerEntry, Value, VariantSetSpec, VariantSpec,
+    combine_dictionaries, combine_dictionary_chain, get_field, get_field_mut,
+    insert_field_if_absent, set_field_vec,
 };
 pub use interner::{TokenId, TokenInterner};
 pub use layer_stack::LayerStack;

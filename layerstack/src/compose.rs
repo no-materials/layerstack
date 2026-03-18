@@ -19,7 +19,7 @@ use crate::{
         resolve_variant_selections_for_prim,
     },
     dependency_map::{ArcDependency, DependencyBuilder},
-    doc::{FieldValue, LayerId, LayerStore, Reference},
+    doc::{FieldValue, LayerId, LayerOffset, LayerStore, Reference},
     interner::TokenId,
     layer_stack::LayerStack,
     path::PathId,
@@ -1253,6 +1253,7 @@ fn add_local_and_variant_opinions(
                         },
                         field: entry.name,
                         value: entry.value.clone(),
+                        layer_offset: LayerOffset::IDENTITY,
                     });
             }
 
@@ -1329,6 +1330,7 @@ fn add_local_and_variant_opinions(
                             },
                             field: entry.name,
                             value: entry.value.clone(),
+                            layer_offset: LayerOffset::IDENTITY,
                         });
                 }
 
@@ -1359,6 +1361,7 @@ fn add_local_and_variant_opinions(
                                     },
                                     field: entry.name,
                                     value: entry.value.clone(),
+                                    layer_offset: LayerOffset::IDENTITY,
                                 });
                         }
                         out.get_mut(&child_path_id)
@@ -1722,6 +1725,7 @@ fn add_inherit_edge_opinions(
                     },
                     field,
                     value,
+                    layer_offset: LayerOffset::IDENTITY,
                 });
         }
     }
@@ -1773,6 +1777,7 @@ fn add_inherit_edge_opinions(
                             },
                             field: *field,
                             value: opinion.value.clone(),
+                            layer_offset: LayerOffset::IDENTITY,
                         });
                 }
             }
@@ -2034,6 +2039,7 @@ fn add_inherit_edge_opinions(
                             },
                             field: *field,
                             value: opinion.value.clone(),
+                            layer_offset: LayerOffset::IDENTITY,
                         });
                 }
             }
@@ -2369,7 +2375,12 @@ fn add_reference_edge_opinions(
             let value = remap_field_value_paths(store, &dest_root_path, &target_root, value);
             out.get_mut(&dest_path_id)
                 .expect("path exists")
-                .add_opinion(Opinion { key, field, value });
+                .add_opinion(Opinion {
+                    key,
+                    field,
+                    value,
+                    layer_offset: LayerOffset::IDENTITY,
+                });
         }
     }
 
@@ -2722,6 +2733,7 @@ fn add_payload_edge_opinions(
                         },
                         field: entry.name,
                         value: entry.value.clone(),
+                        layer_offset: LayerOffset::IDENTITY,
                     });
             }
 
@@ -3129,6 +3141,7 @@ fn add_specializes_edge_opinions(
                     },
                     field,
                     value,
+                    layer_offset: LayerOffset::IDENTITY,
                 });
         }
     }
@@ -3177,6 +3190,7 @@ fn add_specializes_edge_opinions(
                             },
                             field: *field,
                             value: opinion.value.clone(),
+                            layer_offset: LayerOffset::IDENTITY,
                         });
                 }
             }

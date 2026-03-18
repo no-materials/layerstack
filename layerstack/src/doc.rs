@@ -340,6 +340,95 @@ pub enum InterpolationType {
     Linear,
 }
 
+/// A time offset/scale pair for retiming (§16.3.10.20, §12.3.2.1).
+///
+/// Remaps time via: `mappedTime = queryTime * scale + offset`.
+/// The identity (no-op) is `{ offset: 0.0, scale: 1.0 }`.
+///
+/// `Eq` is implemented via bitwise comparison of the `f64` fields, which is
+/// correct for list-op identity matching (two references with different
+/// offsets are distinct list-op entries).
+#[derive(Clone, Copy, Debug)]
+pub struct LayerOffset {
+    /// Time offset in frames.
+    pub offset: f64,
+    /// Time scale factor (must be positive and non-zero).
+    pub scale: f64,
+}
+
+impl PartialEq for LayerOffset {
+    fn eq(&self, other: &Self) -> bool {
+        self.offset.to_bits() == other.offset.to_bits()
+            && self.scale.to_bits() == other.scale.to_bits()
+    }
+}
+
+impl Eq for LayerOffset {}
+
+impl Default for LayerOffset {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+impl LayerOffset {
+    /// The identity (no-op) layer offset.
+    pub const IDENTITY: Self = Self {
+        offset: 0.0,
+        scale: 1.0,
+    };
+
+    /// Returns `true` if this is the identity (no-op) offset.
+    #[must_use]
+    pub fn is_identity(self) -> bool {
+        self.offset == 0.0 && self.scale == 1.0
+    }
+
+    /// Maps a stage time to a layer-local time.
+    ///
+    /// Spec: §12.3.2.1 — `mappedTime = queryTime * scale + offset`.
+    #[must_use]
+    pub fn map_time(self, time: f64) -> f64 {
+        time * self.scale + self.offset
+    }
+
+    /// Composes two offsets: `self` is the outer, `inner` is the inner.
+    ///
+    /// The result maps time as if `inner` were applied first, then `self`.
+    #[must_use]
+    pub fn compose(self, inner: Self) -> Self {
+        Self {
+            offset: self.offset + self.scale * inner.offset,
+            scale: self.scale * inner.scale,
+        }
+    }
+}
+
+/// A sublayer entry with an optional time offset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SublayerEntry {
+    /// The sublayer's layer ID.
+    pub layer: LayerId,
+    /// Time offset applied to this sublayer (§12.3.2.1).
+    pub offset: LayerOffset,
+}
+
+impl SublayerEntry {
+    /// Creates a sublayer entry with no time offset.
+    pub fn new(layer: LayerId) -> Self {
+        Self {
+            layer,
+            offset: LayerOffset::IDENTITY,
+        }
+    }
+}
+
+impl From<LayerId> for SublayerEntry {
+    fn from(layer: LayerId) -> Self {
+        Self::new(layer)
+    }
+}
+
 /// A composition reference arc.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reference {
@@ -349,6 +438,8 @@ pub struct Reference {
     pub prim_path: PathId,
     /// Optional debug name / URI.
     pub asset: Option<String>,
+    /// Time offset applied across this reference boundary (§12.3.2.1).
+    pub layer_offset: LayerOffset,
 }
 
 impl Reference {
@@ -358,6 +449,7 @@ impl Reference {
             layer,
             prim_path,
             asset: None,
+            layer_offset: LayerOffset::IDENTITY,
         }
     }
 
@@ -367,6 +459,7 @@ impl Reference {
             layer,
             prim_path,
             asset: Some(asset.into()),
+            layer_offset: LayerOffset::IDENTITY,
         }
     }
 }
@@ -738,7 +831,7 @@ pub struct Layer {
     /// Stable identifier for this layer.
     pub id: LayerId,
     /// Ordered sublayer includes. The layer itself is always stronger than its sublayers.
-    pub sublayers: Vec<LayerId>,
+    pub sublayers: Vec<SublayerEntry>,
     /// Prim specs keyed by prim path.
     pub prims: HashMap<PathId, PrimSpec>,
 }

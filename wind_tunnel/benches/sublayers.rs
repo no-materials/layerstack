@@ -11,7 +11,9 @@
 extern crate alloc;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use layerstack::{InMemoryStore, Layer, LayerId, PrimSpec, Stage, StageOptions, Value};
+use layerstack::{
+    InMemoryStore, Layer, LayerId, PrimSpec, Stage, StageOptions, SublayerEntry, Value,
+};
 
 /// Build a scene with `n_layers` sublayers, each providing opinions on
 /// `n_prims` prims, then compose.
@@ -32,7 +34,9 @@ fn build_and_compose(n_layers: usize, n_prims: usize) -> Stage {
     }
 
     // Root layer (LayerId 1) — defines the sublayer chain and the root prim.
-    let sublayer_ids: Vec<LayerId> = (2..=(n_layers as u64)).map(LayerId).collect();
+    let sublayer_ids: Vec<SublayerEntry> = (2..=(n_layers as u64))
+        .map(|n| SublayerEntry::new(LayerId(n)))
+        .collect();
 
     let mut root_layer = Layer::new(LayerId(1));
     root_layer.sublayers = sublayer_ids;

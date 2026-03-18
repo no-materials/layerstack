@@ -41,7 +41,7 @@ impl LayerStack {
             out.push(id);
             if let Some(layer) = store.layer(id) {
                 for sub in &layer.sublayers {
-                    visit(store, *sub, visiting, out);
+                    visit(store, sub.layer, visiting, out);
                 }
             }
 
@@ -58,8 +58,15 @@ impl LayerStack {
 mod tests {
     use super::*;
     use crate::HashMap;
-    use crate::doc::{InMemoryStore, Layer};
+    use crate::doc::{InMemoryStore, Layer, SublayerEntry};
     use alloc::vec;
+
+    /// Shorthand for sublayer entries without offsets.
+    fn subs(ids: &[u64]) -> Vec<SublayerEntry> {
+        ids.iter()
+            .map(|&id| SublayerEntry::new(LayerId(id)))
+            .collect()
+    }
 
     #[test]
     fn duplicates_are_preserved_in_layer_stack() {
@@ -69,12 +76,12 @@ mod tests {
         let mut store = InMemoryStore::default();
         store.insert_layer(Layer {
             id: LayerId(1),
-            sublayers: vec![LayerId(2), LayerId(3)],
+            sublayers: subs(&[2, 3]),
             prims: HashMap::new(),
         });
         store.insert_layer(Layer {
             id: LayerId(2),
-            sublayers: vec![LayerId(3)],
+            sublayers: subs(&[3]),
             prims: HashMap::new(),
         });
         store.insert_layer(Layer {
@@ -97,17 +104,17 @@ mod tests {
         let mut store = InMemoryStore::default();
         store.insert_layer(Layer {
             id: LayerId(1),
-            sublayers: vec![LayerId(2)],
+            sublayers: subs(&[2]),
             prims: HashMap::new(),
         });
         store.insert_layer(Layer {
             id: LayerId(2),
-            sublayers: vec![LayerId(3)],
+            sublayers: subs(&[3]),
             prims: HashMap::new(),
         });
         store.insert_layer(Layer {
             id: LayerId(3),
-            sublayers: vec![LayerId(2)],
+            sublayers: subs(&[2]),
             prims: HashMap::new(),
         });
 

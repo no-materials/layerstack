@@ -276,7 +276,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        FieldValue, HashMap, Layer, PrimSpec, Reference, Value, doc::InMemoryStore, path::Path,
+        FieldValue, HashMap, Layer, PrimSpec, Reference, SublayerEntry, Value, doc::InMemoryStore,
+        path::Path,
     };
 
     fn p(store: &mut InMemoryStore, s: &str) -> PathId {
@@ -473,7 +474,7 @@ mod tests {
 
         let mut layer1 = Layer {
             id: LayerId(1),
-            sublayers: vec![LayerId(2)],
+            sublayers: vec![SublayerEntry::new(LayerId(2))],
             prims: HashMap::new(),
         };
         let mut spec1 = PrimSpec::default();
@@ -580,7 +581,7 @@ mod tests {
         // Two independent prims across two layers.
         let mut layer1 = Layer {
             id: LayerId(1),
-            sublayers: vec![LayerId(2)],
+            sublayers: vec![SublayerEntry::new(LayerId(2))],
             prims: HashMap::new(),
         };
         let mut a_spec = PrimSpec::default();
@@ -826,7 +827,7 @@ mod tests {
         // Prim A in layer 1, prim B in layer 2.
         let mut layer1 = Layer {
             id: LayerId(1),
-            sublayers: vec![LayerId(2)],
+            sublayers: vec![SublayerEntry::new(LayerId(2))],
             prims: HashMap::new(),
         };
         let mut a_spec = PrimSpec::default();

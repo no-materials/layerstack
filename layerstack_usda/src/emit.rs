@@ -17,8 +17,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use layerstack::doc::{
-    FieldValue, Layer, LayerId, PrimSpec, Reference, Specifier, Value, VariantSpec, get_field_mut,
-    insert_field_if_absent, set_field_vec,
+    FieldValue, Layer, LayerId, LayerOffset, PrimSpec, Reference, Specifier, SublayerEntry, Value,
+    VariantSpec, get_field_mut, insert_field_if_absent, set_field_vec,
 };
 use layerstack::interner::{TokenId, TokenInterner};
 use layerstack::listop::ListOp;
@@ -98,7 +98,14 @@ impl EmitCtx<'_> {
                 ast::LayerMeta::SubLayers(items) => {
                     for item in items {
                         if let Some(resolved) = self.resolve_asset(item.asset) {
-                            layer.sublayers.push(resolved.layer_id);
+                            let offset = LayerOffset {
+                                offset: item.offset.unwrap_or(0.0),
+                                scale: item.scale.unwrap_or(1.0),
+                            };
+                            layer.sublayers.push(SublayerEntry {
+                                layer: resolved.layer_id,
+                                offset,
+                            });
                             if let Some(sub_layer) = resolved.layer {
                                 self.resolved_layers.push(sub_layer);
                             }
@@ -936,10 +943,16 @@ impl EmitCtx<'_> {
 
         let asset_str = arc_ref.asset.map(String::from);
 
+        let layer_offset = LayerOffset {
+            offset: arc_ref.offset.unwrap_or(0.0),
+            scale: arc_ref.scale.unwrap_or(1.0),
+        };
+
         Some(Reference {
             layer: layer_id,
             prim_path,
             asset: asset_str,
+            layer_offset,
         })
     }
 
@@ -1380,7 +1393,7 @@ def \"A\" {
 ";
         let (result, _, _) = emit_source(src);
         assert_eq!(result.layer.sublayers.len(), 1);
-        assert_eq!(result.layer.sublayers[0], LayerId(100));
+        assert_eq!(result.layer.sublayers[0], SublayerEntry::new(LayerId(100)));
         assert_eq!(result.resolved_layers.len(), 1);
     }
 

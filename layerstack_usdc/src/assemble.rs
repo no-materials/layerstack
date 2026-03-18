@@ -17,8 +17,8 @@ use alloc::vec::Vec;
 use layerstack::HashMap;
 
 use layerstack::doc::{
-    FieldValue, Layer, LayerId, PrimSpec, Reference, Specifier, Value, VariantSetSpec, VariantSpec,
-    set_field_vec,
+    FieldValue, Layer, LayerId, LayerOffset, PrimSpec, Reference, Specifier, SublayerEntry, Value,
+    VariantSetSpec, VariantSpec, set_field_vec,
 };
 use layerstack::interner::{TokenId, TokenInterner};
 use layerstack::listop::ListOp;
@@ -224,7 +224,7 @@ impl AssembleCtx<'_> {
                     if let CrateValue::PathVector(paths) = value {
                         for asset_path in paths {
                             if let Some(resolved) = self.resolve_asset(asset_path) {
-                                layer.sublayers.push(resolved.layer_id);
+                                layer.sublayers.push(SublayerEntry::new(resolved.layer_id));
                                 if let Some(sub_layer) = resolved.layer {
                                     self.resolved_layers.push(sub_layer);
                                 }
@@ -917,7 +917,8 @@ impl AssembleCtx<'_> {
         if let CrateValue::Dictionary(entries) = cv {
             let mut asset_path = String::new();
             let mut prim_path = String::new();
-            // layer_offset and layer_scale not yet used by Reference.
+            let mut layer_offset_val = 0.0_f64;
+            let mut layer_scale_val = 1.0_f64;
 
             for (key, val) in entries {
                 match key.as_str() {
@@ -929,6 +930,16 @@ impl AssembleCtx<'_> {
                     "primPath" => {
                         if let CrateValue::String(s) = val {
                             prim_path = s.clone();
+                        }
+                    }
+                    "layerOffset" => {
+                        if let CrateValue::Double(v) = val {
+                            layer_offset_val = *v;
+                        }
+                    }
+                    "layerScale" => {
+                        if let CrateValue::Double(v) = val {
+                            layer_scale_val = *v;
                         }
                     }
                     _ => {}
@@ -979,6 +990,10 @@ impl AssembleCtx<'_> {
                 layer,
                 prim_path: prim_path_id,
                 asset,
+                layer_offset: LayerOffset {
+                    offset: layer_offset_val,
+                    scale: layer_scale_val,
+                },
             })
         } else {
             None

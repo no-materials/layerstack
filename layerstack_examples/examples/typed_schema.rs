@@ -19,7 +19,8 @@
 use std::sync::Arc;
 
 use layerstack::{
-    InMemoryStore, Layer, LayerId, PathId, PrimSpec, Stage, StageOptions, TokenId, Value,
+    InMemoryStore, Layer, LayerId, PathId, PrimSpec, Stage, StageOptions, SublayerEntry, TokenId,
+    Value,
 };
 
 // ---------------------------------------------------------------------------
@@ -216,7 +217,7 @@ fn main() {
 
     // --- Base layer: defines the robot with default values. ---
     let mut base = Layer::new(LayerId(1));
-    base.sublayers = vec![LayerId(2)];
+    base.sublayers = vec![SublayerEntry::new(LayerId(2))];
 
     let arm_token = store.tokens.intern("Arm");
 
@@ -357,7 +358,7 @@ fn main() {
     // Move the shot to be the root, with base as sublayer.
     {
         let shot = store.layers.get_mut(&LayerId(2)).unwrap();
-        shot.sublayers = vec![LayerId(1)];
+        shot.sublayers = vec![SublayerEntry::new(LayerId(1))];
         let base = store.layers.get_mut(&LayerId(1)).unwrap();
         base.sublayers = vec![];
     }

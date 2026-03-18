@@ -206,8 +206,8 @@ fn expect_value(
     prim_path: &str,
     field_name: &str,
 ) -> Value {
-    let path = layerstack::path::Path::parse_absolute(prim_path, &mut store.tokens)
-        .expect("invalid path");
+    let path =
+        layerstack::path::Path::parse_absolute(prim_path, &mut store.tokens).expect("invalid path");
     let path_id = store
         .paths
         .lookup(&path)
@@ -230,8 +230,8 @@ fn expect_value(
 }
 
 fn has_prim(store: &mut InMemoryStore, layer_id: LayerId, prim_path: &str) -> bool {
-    let path = layerstack::path::Path::parse_absolute(prim_path, &mut store.tokens)
-        .expect("invalid path");
+    let path =
+        layerstack::path::Path::parse_absolute(prim_path, &mut store.tokens).expect("invalid path");
     let Some(path_id) = store.paths.lookup(&path) else {
         return false;
     };

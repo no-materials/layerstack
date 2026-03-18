@@ -6,8 +6,8 @@ extern crate alloc;
 
 use layerstack::{
     ArcKind, FieldEntry, FieldValue, Layer, LayerId, ListOp, PrimSpec, Reference, ResolvedValue,
-    SchemaDefinition, SchemaRegistry, Stage, StageOptions, Value, VariantSetSpec, VariantSpec,
-    doc::InMemoryStore,
+    SchemaDefinition, SchemaRegistry, Stage, StageOptions, SublayerEntry, Value, VariantSetSpec,
+    VariantSpec, doc::InMemoryStore,
 };
 
 #[test]
@@ -18,7 +18,7 @@ fn sublayer_strength_local_beats_sublayer() {
     let p = store.path("/P");
 
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers = vec![LayerId(2)];
+    root_layer.sublayers = vec![SublayerEntry::new(LayerId(2))];
     root_layer.insert_prim(p, PrimSpec::default().with_field(field_x, 1_i64));
     store.insert_layer(root_layer);
 
@@ -87,7 +87,7 @@ fn variants_selection_is_strength_ordered() {
     let variant_b = store.tokens.intern("B");
 
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers = vec![LayerId(2)];
+    root_layer.sublayers = vec![SublayerEntry::new(LayerId(2))];
     let mut root_spec = PrimSpec::default();
     root_spec.variant_selections.insert(set_v, variant_a);
     root_layer.insert_prim(prim, root_spec);
@@ -139,7 +139,7 @@ fn listop_chain_is_applied_strong_to_weak() {
     let prim = store.path("/P");
 
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers = vec![LayerId(2)];
+    root_layer.sublayers = vec![SublayerEntry::new(LayerId(2))];
     let mut root_spec = PrimSpec::default();
     root_spec.set_field(
         field_classes,
@@ -250,7 +250,10 @@ fn child_order_reorder_name_children_matches_supplemental_fixture() {
     let a_z = store.path("/A/z");
 
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers = vec![LayerId(2), LayerId(3)];
+    root_layer.sublayers = vec![
+        SublayerEntry::new(LayerId(2)),
+        SublayerEntry::new(LayerId(3)),
+    ];
     let root_spec = PrimSpec {
         authored_children: vec![f],
         prim_order: Some(vec![z, f, y]),
@@ -296,7 +299,7 @@ fn explain_field_returns_sorted_opinion_stack() {
     let field_x = store.tokens.intern("x");
 
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers = vec![LayerId(2)];
+    root_layer.sublayers = vec![SublayerEntry::new(LayerId(2))];
     root_layer.insert_prim(prim, PrimSpec::default().with_field(field_x, 1_i64));
     store.insert_layer(root_layer);
 
@@ -328,7 +331,7 @@ fn token_listop_append_reorders_duplicates() {
     let class_b = store.tokens.intern("b");
 
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers = vec![LayerId(2)];
+    root_layer.sublayers = vec![SublayerEntry::new(LayerId(2))];
     let mut root_spec = PrimSpec::default();
     root_spec.set_field(
         field_classes,
@@ -376,7 +379,10 @@ fn token_listop_prepend_and_append_match_supplemental_list_editing_order() {
     let root_append = store.tokens.intern("root_append");
 
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers = vec![LayerId(2), LayerId(3)];
+    root_layer.sublayers = vec![
+        SublayerEntry::new(LayerId(2)),
+        SublayerEntry::new(LayerId(3)),
+    ];
     let mut root_spec = PrimSpec::default();
     root_spec.set_field(
         field_targets,
@@ -459,7 +465,7 @@ fn token_listop_prepend_composes_before_explicit() {
 
     // Root layer (stronger): prepend apiSchemas = ["PrependedAPI"].
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers = vec![LayerId(2)];
+    root_layer.sublayers = vec![SublayerEntry::new(LayerId(2))];
     let mut root_spec = PrimSpec::default();
     root_spec.set_field(
         api_schemas,
@@ -491,7 +497,10 @@ fn specifier_resolution_follows_strongest_defining() {
 
     // Layer 1 (strongest): over — non-defining
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers = vec![LayerId(2), LayerId(3)];
+    root_layer.sublayers = vec![
+        SublayerEntry::new(LayerId(2)),
+        SublayerEntry::new(LayerId(3)),
+    ];
     root_layer.insert_prim(prim, PrimSpec::over());
     store.insert_layer(root_layer);
 
@@ -521,7 +530,7 @@ fn specifier_all_over_is_undefining() {
     let prim = store.path("/P");
 
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers = vec![LayerId(2)];
+    root_layer.sublayers = vec![SublayerEntry::new(LayerId(2))];
     root_layer.insert_prim(prim, PrimSpec::over());
     store.insert_layer(root_layer);
 
@@ -566,7 +575,7 @@ fn value_blocked_suppresses_weaker_opinions() {
 
     // Strongest layer blocks the field.
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers = vec![LayerId(2)];
+    root_layer.sublayers = vec![SublayerEntry::new(LayerId(2))];
     root_layer.insert_prim(
         prim,
         PrimSpec::default().with_field(field_x, Value::Blocked),
@@ -823,7 +832,7 @@ fn time_samples_override_default_value() {
 
     // Root layer: timeSamples.
     let mut root = Layer::new(LayerId(1));
-    root.sublayers = vec![LayerId(2)];
+    root.sublayers = vec![SublayerEntry::new(LayerId(2))];
     let mut root_spec = PrimSpec::default();
     root_spec.set_field(
         field,
@@ -880,7 +889,7 @@ fn dependency_map_records_local_layer_opinions() {
     let p = store.path("/P");
 
     let mut root = Layer::new(LayerId(1));
-    root.sublayers = vec![LayerId(2)];
+    root.sublayers = vec![SublayerEntry::new(LayerId(2))];
     root.insert_prim(p, PrimSpec::default().with_field(field_x, 1_i64));
     store.insert_layer(root);
 
@@ -1122,7 +1131,7 @@ fn active_strongest_opinion_wins() {
 
     // Root layer: active = true (stronger).
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers = vec![LayerId(2)];
+    root_layer.sublayers = vec![SublayerEntry::new(LayerId(2))];
     root_layer.insert_prim(root, PrimSpec::default().with_children(vec![p_tok]));
     root_layer.insert_prim(
         p,
@@ -1159,7 +1168,7 @@ fn weaker_active_false_deactivates() {
 
     // Root layer: no active opinion.
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers = vec![LayerId(2)];
+    root_layer.sublayers = vec![SublayerEntry::new(LayerId(2))];
     root_layer.insert_prim(root, PrimSpec::default().with_children(vec![p_tok]));
     root_layer.insert_prim(p, PrimSpec::def());
     store.insert_layer(root_layer);
@@ -1192,7 +1201,7 @@ fn type_name_resolved_from_strongest() {
 
     // Root layer: type = Xform (stronger).
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers = vec![LayerId(2)];
+    root_layer.sublayers = vec![SublayerEntry::new(LayerId(2))];
     root_layer.insert_prim(root, PrimSpec::default().with_children(vec![p_tok]));
     root_layer.insert_prim(p, PrimSpec::def().with_type_name(xform_tok));
     store.insert_layer(root_layer);
@@ -1475,7 +1484,7 @@ fn dictionary_combining_across_sublayers() {
 
     // Root (stronger): {a: 1}
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers.push(LayerId(2));
+    root_layer.sublayers.push(SublayerEntry::new(LayerId(2)));
     root_layer.insert_prim(
         p,
         PrimSpec::def().with_field(
@@ -1521,7 +1530,7 @@ fn dictionary_nested_combining() {
     let p = store.path("/P");
 
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers.push(LayerId(2));
+    root_layer.sublayers.push(SublayerEntry::new(LayerId(2)));
     root_layer.insert_prim(
         p,
         PrimSpec::def().with_field(
@@ -1623,7 +1632,7 @@ fn dictionary_blocked_value_suppresses() {
     let p = store.path("/P");
 
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers.push(LayerId(2));
+    root_layer.sublayers.push(SublayerEntry::new(LayerId(2)));
     root_layer.insert_prim(p, PrimSpec::def().with_field(field, Value::Blocked));
     store.insert_layer(root_layer);
 
@@ -1680,7 +1689,7 @@ fn array_value_strongest_wins() {
     let p = store.path("/P");
 
     let mut root_layer = Layer::new(LayerId(1));
-    root_layer.sublayers.push(LayerId(2));
+    root_layer.sublayers.push(SublayerEntry::new(LayerId(2)));
     root_layer.insert_prim(
         p,
         PrimSpec::def().with_field(
