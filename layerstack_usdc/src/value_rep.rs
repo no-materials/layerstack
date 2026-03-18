@@ -10,6 +10,10 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use layerstack::spline::{
+    CurveType, Extrapolation, Knot, KnotInterp, LoopParams, SplineData, SplineDataType,
+};
+
 use crate::compression::read_compressed_ints;
 use crate::error::UsdcError;
 use crate::section::CrateSections;
@@ -159,6 +163,8 @@ pub enum CrateValue {
     LayerOffsetVector(Vec<(f64, f64)>),
     /// Relocates map (source path → target path).
     RelocatesMap(Vec<(String, String)>),
+    /// Decoded spline data (§16.3.10.33).
+    Spline(SplineData),
 }
 
 /// A decoded list operation.
@@ -274,10 +280,7 @@ pub fn decode_value(
         ValueType::Value => decode_value_indirection(rep, data, sections),
         ValueType::UnregisteredValue => decode_unregistered_value(rep, data, sections),
         ValueType::Payload => decode_payload(rep, data, sections),
-        ValueType::Spline => {
-            // Splines are complex; store as opaque for now.
-            Ok(CrateValue::None)
-        }
+        ValueType::Spline => decode_spline(rep, data),
     }
 }
 
@@ -1416,6 +1419,303 @@ fn decode_inlined_or_offset_u32(rep: &RawValueRep, data: &[u8]) -> Result<u32, U
 
 fn read_u32_array_or_inlined(rep: &RawValueRep, data: &[u8]) -> Result<Vec<i64>, UsdcError> {
     read_integer_array(rep, data, 4, false)
+}
+
+// ---------------------------------------------------------------------------
+// Spline decoder (§16.3.10.33)
+// ---------------------------------------------------------------------------
+
+/// Decode a spline value from the USDC binary format (version 1).
+///
+/// Binary layout based on the reference implementation in `splines.py`:
+///
+/// - Header byte 1: version (bits 0–3), data type (bits 4–5), timed value
+///   (bit 6), curve type (bit 7)
+/// - Header byte 2: pre-extrapolation (bits 0–2), post-extrapolation
+///   (bits 3–4), loop flag (bit 6)
+/// - If sloped extrapolation: f64 slope value(s)
+/// - If looping: proto\_start (f64), proto\_end (f64), num\_pre\_loops (i32),
+///   num\_post\_loops (i32), value\_offset (f64)
+/// - Knot count (u32)
+/// - Per knot: flag byte + time (f64) + value + optional pre\_value +
+///   optional tangent widths (Bézier only) + tangent slopes
+fn decode_spline(rep: &RawValueRep, data: &[u8]) -> Result<CrateValue, UsdcError> {
+    let off = payload_offset_usize(rep)?;
+    if off == 0 || off >= data.len() {
+        // Empty spline.
+        return Ok(CrateValue::Spline(SplineData {
+            data_type: SplineDataType::Unspecified,
+            default_curve_type: CurveType::Bezier,
+            pre_extrapolation: Extrapolation::Block,
+            post_extrapolation: Extrapolation::Block,
+            loop_params: None,
+            knots: vec![],
+        }));
+    }
+
+    let mut pos = off;
+
+    // --- Header byte 1 ---
+    let hdr1 = read_u8(data, &mut pos)?;
+    let version = hdr1 & 0x0F;
+    if version != 1 {
+        // Unsupported spline version — treat as empty spline.
+        return Ok(CrateValue::Spline(SplineData {
+            data_type: SplineDataType::Unspecified,
+            default_curve_type: CurveType::Bezier,
+            pre_extrapolation: Extrapolation::Block,
+            post_extrapolation: Extrapolation::Block,
+            loop_params: None,
+            knots: vec![],
+        }));
+    }
+    let data_type = match (hdr1 & 0x30) >> 4 {
+        0 => SplineDataType::Unspecified,
+        1 => SplineDataType::Double,
+        2 => SplineDataType::Float,
+        3 => SplineDataType::Half,
+        _ => SplineDataType::Unspecified,
+    };
+    // bit 6: timed_value (informational, not needed for decoding).
+    let default_curve_type = if (hdr1 & 0x80) >> 7 == 1 {
+        CurveType::Hermite
+    } else {
+        CurveType::Bezier
+    };
+
+    // --- Header byte 2 ---
+    let hdr2 = read_u8(data, &mut pos)?;
+    let pre_extrap_raw = hdr2 & 0x07;
+    let mut pre_extrapolation = extrap_from_u8(pre_extrap_raw);
+    if pre_extrap_raw == 3 {
+        // Sloped: read f64 slope.
+        let slope = read_f64_le(data, &mut pos)?;
+        pre_extrapolation = Extrapolation::Sloped(slope);
+    }
+
+    let post_extrap_raw = (hdr2 & 0x18) >> 3;
+    let mut post_extrapolation = extrap_from_u8(post_extrap_raw);
+    if post_extrap_raw == 3 {
+        let slope = read_f64_le(data, &mut pos)?;
+        post_extrapolation = Extrapolation::Sloped(slope);
+    }
+
+    let has_loops = (hdr2 & 0x40) != 0;
+    let loop_params = if has_loops {
+        let proto_start = read_f64_le(data, &mut pos)?;
+        let proto_end = read_f64_le(data, &mut pos)?;
+        let num_pre_loops = read_i32_le(data, &mut pos)?;
+        let num_post_loops = read_i32_le(data, &mut pos)?;
+        let value_offset = read_f64_le(data, &mut pos)?;
+        Some(LoopParams {
+            proto_start,
+            proto_end,
+            num_pre_loops,
+            num_post_loops,
+            value_offset,
+        })
+    } else {
+        None
+    };
+
+    // If data type is Unspecified, there are no knots.
+    if data_type == SplineDataType::Unspecified {
+        return Ok(CrateValue::Spline(SplineData {
+            data_type,
+            default_curve_type,
+            pre_extrapolation,
+            post_extrapolation,
+            loop_params,
+            knots: vec![],
+        }));
+    }
+
+    // --- Knots ---
+    let num_knots = read_u32_le(data, &mut pos)? as usize;
+    let mut knots = Vec::with_capacity(num_knots);
+
+    let is_hermite = default_curve_type == CurveType::Hermite;
+
+    for _ in 0..num_knots {
+        let flag = read_u8(data, &mut pos)?;
+        let dual_valued = (flag & 0x01) != 0;
+        let next_interp = knot_interp_from_u8((flag & 0x06) >> 1);
+        let curve_type = if (flag & 0x08) >> 3 == 1 {
+            CurveType::Hermite
+        } else {
+            CurveType::Bezier
+        };
+        let pre_tan_maya_form = (flag & 0x10) != 0;
+        let post_tan_maya_form = (flag & 0x20) != 0;
+
+        // Time is always f64.
+        let time = read_f64_le(data, &mut pos)?;
+
+        // Value: type-dependent.
+        let value = read_typed_value(data, &mut pos, data_type)?;
+
+        let pre_value = if dual_valued {
+            Some(read_typed_value(data, &mut pos, data_type)?)
+        } else {
+            None
+        };
+
+        // Tangent widths (Bézier only; Hermite has no widths).
+        let (pre_tan_width, post_tan_width) = if !is_hermite {
+            let pre_w = read_f64_le(data, &mut pos)?;
+            let post_w = read_f64_le(data, &mut pos)?;
+            (pre_w, post_w)
+        } else {
+            (0.0, 0.0)
+        };
+
+        // Tangent slopes: type-dependent.
+        let pre_tan_slope = read_typed_value(data, &mut pos, data_type)?;
+        let post_tan_slope = read_typed_value(data, &mut pos, data_type)?;
+
+        knots.push(Knot {
+            time,
+            value,
+            pre_value,
+            next_interp,
+            curve_type,
+            pre_tan_maya_form,
+            post_tan_maya_form,
+            pre_tan_width,
+            post_tan_width,
+            pre_tan_slope,
+            post_tan_slope,
+        });
+    }
+
+    Ok(CrateValue::Spline(SplineData {
+        data_type,
+        default_curve_type,
+        pre_extrapolation,
+        post_extrapolation,
+        loop_params,
+        knots,
+    }))
+}
+
+/// Convert a 3-bit extrapolation mode to [`Extrapolation`].
+fn extrap_from_u8(v: u8) -> Extrapolation {
+    match v {
+        0 => Extrapolation::Block,
+        1 => Extrapolation::Held,
+        2 => Extrapolation::Linear,
+        // 3 (Sloped) is handled by the caller which reads the slope value.
+        3 => Extrapolation::Sloped(0.0),
+        4 => Extrapolation::LoopRepeat,
+        5 => Extrapolation::LoopReset,
+        6 => Extrapolation::LoopOscillate,
+        _ => Extrapolation::Block,
+    }
+}
+
+/// Convert a 2-bit interpolation mode to [`KnotInterp`].
+fn knot_interp_from_u8(v: u8) -> KnotInterp {
+    match v {
+        0 => KnotInterp::Block,
+        1 => KnotInterp::Held,
+        2 => KnotInterp::Linear,
+        3 => KnotInterp::Curve,
+        _ => KnotInterp::Block,
+    }
+}
+
+/// Read a single byte, advancing `pos`.
+fn read_u8(data: &[u8], pos: &mut usize) -> Result<u8, UsdcError> {
+    if *pos >= data.len() {
+        return Err(UsdcError::UnexpectedEof {
+            section: "spline",
+            offset: *pos as u64,
+            expected: 1,
+        });
+    }
+    let v = data[*pos];
+    *pos += 1;
+    Ok(v)
+}
+
+/// Read a little-endian `f64`, advancing `pos`.
+fn read_f64_le(data: &[u8], pos: &mut usize) -> Result<f64, UsdcError> {
+    if *pos + 8 > data.len() {
+        return Err(UsdcError::UnexpectedEof {
+            section: "spline",
+            offset: *pos as u64,
+            expected: 8,
+        });
+    }
+    let v = f64::from_le_bytes(data[*pos..*pos + 8].try_into().unwrap());
+    *pos += 8;
+    Ok(v)
+}
+
+/// Read a little-endian `f32`, advancing `pos`.
+fn read_f32_le(data: &[u8], pos: &mut usize) -> Result<f32, UsdcError> {
+    if *pos + 4 > data.len() {
+        return Err(UsdcError::UnexpectedEof {
+            section: "spline",
+            offset: *pos as u64,
+            expected: 4,
+        });
+    }
+    let v = f32::from_le_bytes(data[*pos..*pos + 4].try_into().unwrap());
+    *pos += 4;
+    Ok(v)
+}
+
+/// Read a little-endian `i32`, advancing `pos`.
+fn read_i32_le(data: &[u8], pos: &mut usize) -> Result<i32, UsdcError> {
+    if *pos + 4 > data.len() {
+        return Err(UsdcError::UnexpectedEof {
+            section: "spline",
+            offset: *pos as u64,
+            expected: 4,
+        });
+    }
+    let v = i32::from_le_bytes(data[*pos..*pos + 4].try_into().unwrap());
+    *pos += 4;
+    Ok(v)
+}
+
+/// Read a little-endian `u32`, advancing `pos`.
+fn read_u32_le(data: &[u8], pos: &mut usize) -> Result<u32, UsdcError> {
+    if *pos + 4 > data.len() {
+        return Err(UsdcError::UnexpectedEof {
+            section: "spline",
+            offset: *pos as u64,
+            expected: 4,
+        });
+    }
+    let v = u32::from_le_bytes(data[*pos..*pos + 4].try_into().unwrap());
+    *pos += 4;
+    Ok(v)
+}
+
+/// Read a value in the spline's data type, converting to `f64`.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "half-float conversion intentional"
+)]
+fn read_typed_value(data: &[u8], pos: &mut usize, dt: SplineDataType) -> Result<f64, UsdcError> {
+    match dt {
+        SplineDataType::Double | SplineDataType::Unspecified => read_f64_le(data, pos),
+        SplineDataType::Float => Ok(f64::from(read_f32_le(data, pos)?)),
+        SplineDataType::Half => {
+            if *pos + 2 > data.len() {
+                return Err(UsdcError::UnexpectedEof {
+                    section: "spline half",
+                    offset: *pos as u64,
+                    expected: 2,
+                });
+            }
+            let bits = u16::from_le_bytes(data[*pos..*pos + 2].try_into().unwrap());
+            *pos += 2;
+            Ok(half_to_f64(bits))
+        }
+    }
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@ use crate::{
     path::PathId,
     prim_index::{Opinion, PrimIndex},
     schema::SchemaRegistry,
+    spline::{SplineData, SplineDataType},
 };
 
 /// Provenance information for resolved values.
@@ -316,9 +317,9 @@ impl Stage {
                     provenance: self.provenance_for(field, strongest),
                 })
             }
-            FieldValue::TimeSamples(_) => {
-                // When resolved without a time, timeSamples return no scalar value.
-                // Use resolve_value_at_time() for time-varying queries.
+            FieldValue::TimeSamples(_) | FieldValue::Spline(_) => {
+                // When resolved without a time, timeSamples/splines return no
+                // scalar value. Use resolve_value_at_time() for time-varying queries.
                 None
             }
         }
@@ -363,7 +364,24 @@ impl Stage {
             }
         }
 
-        // No timeSamples found: fall back to scalar default.
+        // No timeSamples found: check for spline opinions (§12.3.3).
+        // Splines sit between timeSamples and default in resolution priority.
+        for opinion in opinions {
+            if let FieldValue::Spline(spline) = &opinion.value {
+                let mapped_time = opinion.layer_offset.map_time(time);
+                if let Some(val) = spline.evaluate(mapped_time) {
+                    let value = spline_to_value(spline, val);
+                    return Some(Resolved {
+                        value,
+                        provenance: self.provenance_for(field, opinion),
+                    });
+                }
+                // Spline returned None (Block extrapolation) — no value.
+                return None;
+            }
+        }
+
+        // No timeSamples or splines found: fall back to scalar default.
         for opinion in opinions {
             if let FieldValue::Value(v) = &opinion.value
                 && *v != Value::Blocked
@@ -552,7 +570,7 @@ impl Stage {
                 FieldValue::PathListOp(op) => {
                     ResolvedValue::PathList(resolve_list_chain::<PathId>(&[], [op]))
                 }
-                FieldValue::TimeSamples(_) => return None,
+                FieldValue::TimeSamples(_) | FieldValue::Spline(_) => return None,
             },
             provenance: None,
         })
@@ -737,4 +755,55 @@ fn lerp_values(a: &Value, b: &Value, t_a: f64, t_b: f64, t: f64) -> Option<Value
 /// Round-to-nearest for lerp results (no_std-compatible).
 fn lerp_round(v: f64) -> f64 {
     if v >= 0.0 { v + 0.5 } else { v - 0.5 }
+}
+
+/// Convert a spline evaluation result to the appropriate [`Value`] type
+/// based on the spline's data type.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "f64→f32 intentional for single-precision splines"
+)]
+fn spline_to_value(spline: &SplineData, val: f64) -> Value {
+    match spline.data_type {
+        SplineDataType::Double | SplineDataType::Unspecified => Value::Double(val),
+        SplineDataType::Float => Value::Float(val as f32),
+        SplineDataType::Half => Value::Half(half_from_f64(val)),
+    }
+}
+
+/// Convert an `f64` to IEEE 754 half-precision bits (no_std-compatible).
+///
+/// This is a simplified conversion that handles normal, denormal, infinity,
+/// and NaN cases.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "intentional bit manipulation for f16 conversion"
+)]
+fn half_from_f64(v: f64) -> u16 {
+    // Convert through f32 first for simplicity.
+    let f = v as f32;
+    let bits = f.to_bits();
+    let sign = (bits >> 16) & 0x8000;
+    let exp = ((bits >> 23) & 0xFF) as i32 - 127 + 15;
+    let frac = bits & 0x007F_FFFF;
+
+    if exp <= 0 {
+        // Denormal or zero.
+        if exp < -10 {
+            sign as u16
+        } else {
+            let f_shifted = (frac | 0x0080_0000) >> (1 - exp);
+            (sign | (f_shifted >> 13)) as u16
+        }
+    } else if exp >= 31 {
+        // Infinity or NaN.
+        if frac == 0 {
+            (sign | 0x7C00) as u16
+        } else {
+            (sign | 0x7C00 | (frac >> 13)) as u16
+        }
+    } else {
+        (sign | ((exp as u32) << 10) | (frac >> 13)) as u16
+    }
 }

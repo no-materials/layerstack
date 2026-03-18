@@ -32,6 +32,7 @@ pub mod path;
 pub mod population;
 pub mod prim_index;
 pub mod schema;
+pub mod spline;
 pub mod stage;
 
 pub mod live_stage;
@@ -50,6 +51,7 @@ pub use listop::ListOp;
 pub use path::{Path, PathId, PathInterner};
 pub use prim_index::{ArcKind, Opinion, OpinionKey};
 pub use schema::{PropertyDefinition, SchemaDefinition, SchemaRegistry};
+pub use spline::SplineData;
 pub use stage::{Resolved, ResolvedValue, Stage, StageOptions};
 
 pub use live_stage::LiveStage;

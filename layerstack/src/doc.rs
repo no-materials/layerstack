@@ -13,6 +13,7 @@ use crate::{
     interner::TokenInterner,
     listop::ListOp,
     path::{PathId, PathInterner},
+    spline::SplineData,
 };
 
 /// Identifies a layer by stable ID.
@@ -283,6 +284,14 @@ pub enum FieldValue {
     ///
     /// Spec: AOUSD Core §12.3.2.2 (timeSamples metadata).
     TimeSamples(Vec<(f64, Value)>),
+    /// Spline-based time-varying data.
+    ///
+    /// Splines sit between `TimeSamples` and default values in the
+    /// resolution priority order. They provide smooth Bézier or Hermite
+    /// interpolation between knots.
+    ///
+    /// Spec: AOUSD Core §12.3.3 (spline opinions), §16.3.10.33 (encoding).
+    Spline(SplineData),
 }
 
 impl From<Value> for FieldValue {

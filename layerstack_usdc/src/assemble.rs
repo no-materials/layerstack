@@ -372,8 +372,10 @@ impl AssembleCtx<'_> {
     ) -> Result<(), UsdcError> {
         let name_tok = self.tokens.intern(attr_name);
 
-        // Look for time samples, default value, or connection paths.
+        // Look for time samples, spline, default value, or connection paths.
+        // Priority: timeSamples > spline > default (§12.3).
         let mut has_time_samples = false;
+        let mut has_spline = false;
         let mut has_default = false;
 
         for (field_name, value) in fields {
@@ -388,8 +390,18 @@ impl AssembleCtx<'_> {
                         has_time_samples = true;
                     }
                 }
+                "spline" => {
+                    if !has_time_samples && let CrateValue::Spline(spline) = value {
+                        set_field_vec(
+                            &mut prim.fields,
+                            name_tok,
+                            FieldValue::Spline(spline.clone()),
+                        );
+                        has_spline = true;
+                    }
+                }
                 "default" => {
-                    if !has_time_samples {
+                    if !has_time_samples && !has_spline {
                         let converted = self.convert_crate_value(value);
                         set_field_vec(&mut prim.fields, name_tok, FieldValue::Value(converted));
                         has_default = true;
@@ -408,9 +420,9 @@ impl AssembleCtx<'_> {
             }
         }
 
-        // If the attribute was declared with no default and no time samples,
+        // If the attribute was declared with no default, spline, or time samples,
         // register as Null (attribute declaration).
-        if !has_time_samples && !has_default {
+        if !has_time_samples && !has_spline && !has_default {
             let has_connection = fields.iter().any(|(n, _)| n == "connectionPaths");
             if !has_connection {
                 layerstack::insert_field_if_absent(
@@ -711,6 +723,10 @@ impl AssembleCtx<'_> {
                 Value::Array(vals)
             }
             CrateValue::RelocatesMap(_) => Value::Null,
+            CrateValue::Spline(_) => {
+                // Splines are handled as FieldValue::Spline, not plain values.
+                Value::Null
+            }
         }
     }
 
@@ -744,6 +760,7 @@ impl AssembleCtx<'_> {
                     .collect();
                 FieldValue::TimeSamples(ts)
             }
+            CrateValue::Spline(spline) => FieldValue::Spline(spline.clone()),
             _ => FieldValue::Value(self.convert_crate_value(cv)),
         }
     }
