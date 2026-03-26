@@ -208,3 +208,51 @@ separate spec-identity layer and to reference/payload target resolution.
   identity without making merge order unstable.
 - Provenance propagation appears in many code paths; partial conversion could
   easily produce mixed single-host and multi-host behavior.
+
+## Follow-On: Remapped Ancestor Selection Roots
+
+### Endpoint
+
+- Forwarded arc composition resolves variant selections against the correct
+  selection root even when the source provenance path and the strongest
+  selection live on different remapped ancestors.
+- Prim-stack provenance for forwarded inherits/specializes/reference/payload
+  opinions retains the variant-qualified source path expected by the remaining
+  PCP fixtures.
+- The remaining provenance-related ignored PCP cases are reduced to the known
+  external-fallback and payload-through-subroot gaps.
+
+### Goals
+
+- Replace ad hoc `dest_path` vs `source_path` selection lookups with one
+  explicit selection-root model.
+- Distinguish three paths during forwarding:
+  destination path, source authored path, and selection-root path.
+- Unblock the remaining PCP cases around ancestral selections, weaker remapped
+  selections, and forwarded prim-stack provenance under inherits/specializes.
+
+### Non-goals
+
+- Implement the AOUSD PCP harness's external fallback selections.
+- Implement nested payload-through-subroot or self-payload semantics.
+
+### Phases
+
+1. Failure triage
+   - Reproduce the six remaining provenance failures and group them by shared
+     selection-root behavior.
+2. Selection-root model
+   - Add a small helper/context type for forwarded opinions that carries the
+     destination path, source path, and selection-root path separately.
+3. Forwarding integration
+   - Route inherits, specializes, references, and payloads through the shared
+     selection-root helper.
+4. Validation
+   - Unignore the newly passing PCP cases and keep the known non-goals ignored.
+
+### Risks
+
+- Some remaining cases may depend on ancestor remapping that differs between
+  value resolution and prim-stack/source provenance.
+- Payload forwarding may still expose the older subroot gap; selection-root
+  cleanup should not accidentally blur that boundary.

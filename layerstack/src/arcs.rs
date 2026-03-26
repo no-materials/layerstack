@@ -47,6 +47,51 @@ pub(crate) fn resolve_inherits_for_prim(
         };
         ops.push(spec.inherits.clone());
     }
+
+    let selections = resolve_variant_selections_for_prim(store, local_stack, prim);
+    for layer_id in &local_stack.layers {
+        let Some(layer) = store.layer(*layer_id) else {
+            continue;
+        };
+        let Some(spec) = layer.prims.get(&prim) else {
+            continue;
+        };
+        for (set_tok, selected_variant) in &selections {
+            if let Some(set_spec) = spec.variant_sets.get(set_tok)
+                && let Some(variant_spec) = set_spec.variants.get(selected_variant)
+            {
+                let vi = &variant_spec.inherits;
+                if vi.explicit.is_some() || !vi.prepend.is_empty() || !vi.append.is_empty() {
+                    ops.push(vi.clone());
+                }
+            }
+        }
+    }
+
+    let leaf = store.paths().resolve(prim).leaf();
+    let parent = store.paths().resolve(prim).parent();
+    if let (Some(leaf), Some(parent)) = (leaf, parent)
+        && let Some(parent_id) = store.paths().lookup(&parent)
+    {
+        let parent_selections = resolve_variant_selections_for_prim(store, local_stack, parent_id);
+        for layer_id in &local_stack.layers {
+            let Some(layer) = store.layer(*layer_id) else {
+                continue;
+            };
+            let Some(parent_spec) = layer.prims.get(&parent_id) else {
+                continue;
+            };
+            for (set_tok, selected_variant) in &parent_selections {
+                if let Some(set_spec) = parent_spec.variant_sets.get(set_tok)
+                    && let Some(variant_spec) = set_spec.variants.get(selected_variant)
+                    && let Some(child_inherits) = variant_spec.child_inherits.get(&leaf)
+                {
+                    ops.push(child_inherits.clone());
+                }
+            }
+        }
+    }
+
     resolve_list_chain::<PathId>(&[], ops)
 }
 
@@ -515,6 +560,51 @@ pub(crate) fn resolve_specializes_for_prim(
         };
         ops.push(spec.specializes.clone());
     }
+
+    let selections = resolve_variant_selections_for_prim(store, local_stack, prim);
+    for layer_id in &local_stack.layers {
+        let Some(layer) = store.layer(*layer_id) else {
+            continue;
+        };
+        let Some(spec) = layer.prims.get(&prim) else {
+            continue;
+        };
+        for (set_tok, selected_variant) in &selections {
+            if let Some(set_spec) = spec.variant_sets.get(set_tok)
+                && let Some(variant_spec) = set_spec.variants.get(selected_variant)
+            {
+                let vs = &variant_spec.specializes;
+                if vs.explicit.is_some() || !vs.prepend.is_empty() || !vs.append.is_empty() {
+                    ops.push(vs.clone());
+                }
+            }
+        }
+    }
+
+    let leaf = store.paths().resolve(prim).leaf();
+    let parent = store.paths().resolve(prim).parent();
+    if let (Some(leaf), Some(parent)) = (leaf, parent)
+        && let Some(parent_id) = store.paths().lookup(&parent)
+    {
+        let parent_selections = resolve_variant_selections_for_prim(store, local_stack, parent_id);
+        for layer_id in &local_stack.layers {
+            let Some(layer) = store.layer(*layer_id) else {
+                continue;
+            };
+            let Some(parent_spec) = layer.prims.get(&parent_id) else {
+                continue;
+            };
+            for (set_tok, selected_variant) in &parent_selections {
+                if let Some(set_spec) = parent_spec.variant_sets.get(set_tok)
+                    && let Some(variant_spec) = set_spec.variants.get(selected_variant)
+                    && let Some(child_specializes) = variant_spec.child_specializes.get(&leaf)
+                {
+                    ops.push(child_specializes.clone());
+                }
+            }
+        }
+    }
+
     resolve_list_chain::<PathId>(&[], ops)
 }
 
@@ -536,5 +626,30 @@ pub(crate) fn resolve_payloads_for_prim(
         };
         ops.push(spec.payloads.clone());
     }
+
+    let leaf = store.paths().resolve(prim).leaf();
+    let parent = store.paths().resolve(prim).parent();
+    if let (Some(leaf), Some(parent)) = (leaf, parent)
+        && let Some(parent_id) = store.paths().lookup(&parent)
+    {
+        let parent_selections = resolve_variant_selections_for_prim(store, local_stack, parent_id);
+        for layer_id in &local_stack.layers {
+            let Some(layer) = store.layer(*layer_id) else {
+                continue;
+            };
+            let Some(parent_spec) = layer.prims.get(&parent_id) else {
+                continue;
+            };
+            for (set_tok, selected_variant) in &parent_selections {
+                if let Some(set_spec) = parent_spec.variant_sets.get(set_tok)
+                    && let Some(variant_spec) = set_spec.variants.get(selected_variant)
+                    && let Some(child_payloads) = variant_spec.child_payloads.get(&leaf)
+                {
+                    ops.push(child_payloads.clone());
+                }
+            }
+        }
+    }
+
     resolve_list_chain::<Reference>(&[], ops)
 }

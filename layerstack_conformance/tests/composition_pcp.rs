@@ -417,7 +417,7 @@ fn tricky_specializes_and_inherits_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires variant-qualified spec paths in prim stack opinion sources"]
+#[ignore = "still needs specializes to inherit weaker referenced provenance from the specialized prim stack"]
 fn variant_specializes_and_reference_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("VariantSpecializesAndReference_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
@@ -440,7 +440,7 @@ fn tricky_non_local_variant_selection_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires propagated ancestral variant-qualified source provenance"]
+#[ignore = "still needs ancestral source-path remap to lift stronger variant selections onto weaker longer source paths"]
 fn tricky_variant_ancestral_selection_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("TrickyVariantAncestralSelection_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
@@ -505,7 +505,6 @@ fn tricky_variant_weaker_selection2_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires propagated weaker-selection variant-qualified source provenance"]
 fn tricky_variant_weaker_selection3_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("TrickyVariantWeakerSelection3_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
@@ -534,7 +533,6 @@ fn tricky_variant_override_of_local_class_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires propagated variant-qualified provenance through payloads"]
 fn tricky_variant_in_payload_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("TrickyVariantInPayload_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
@@ -549,7 +547,7 @@ fn tricky_inherits_in_variants_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires variant-qualified spec paths in prim stack opinion sources"]
+#[ignore = "still needs child-source provenance alignment for LEyeRig/SymEyeRig in variant descendants"]
 fn tricky_inherits_in_variants2_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("TrickyInheritsInVariants2_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
@@ -557,7 +555,6 @@ fn tricky_inherits_in_variants2_root_layer_stack_matches() {
 }
 
 #[test]
-#[ignore = "requires variant-qualified spec paths in prim stack opinion sources"]
 fn specializes_and_variants_root_layer_stack_matches() {
     let (mut loaded, pcp_path) = load_fixture("SpecializesAndVariants_root");
     assert_layer_stack_matches(&loaded, &pcp_path);
