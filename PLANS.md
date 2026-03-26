@@ -42,3 +42,35 @@
 - Property type information is currently discarded; sparse array edits require it for `minsize` / `resize`.
 - Schema fallback is currently bolted on after authored resolution; sparse composition needs fallback as part of the weakest opinion chain.
 - USDC support is inherently provisional until the proposal settles on stable wire encoding details.
+
+## Follow-On: Generic Sparse Composition Kernel
+
+### Endpoint
+
+- `Stage` no longer knows about arrays as a special sparse-resolution case.
+- Sparse-family detection and strong-over-weak folding live in an internal
+  resolver module.
+- Default-valued and time-sampled sparse resolution flow through the same
+  internal family pipeline.
+- Arrays remain the only shipped sparse family in this branch, but the internal
+  seam is ready for another family without reopening `Stage`.
+
+### Phases
+
+1. Extract
+   - Move sparse array resolution out of `stage.rs` into
+     `layerstack/src/value_resolution.rs`.
+2. Centralize
+   - Make `Stage` call the resolver module rather than array-specific helpers.
+3. Generalize internally
+   - Introduce an internal sparse-family discriminator and family-owned
+     composition API.
+4. Unify sampled/default folding
+   - Route default and time-sampled sparse resolution through a shared internal
+     fold model.
+5. Add invariant tests
+   - Assert dense termination, sparse-over-sparse associativity, fallback
+     seeding, and blocking behavior.
+6. Stop there
+   - Do not force a second sparse family into this branch unless one is
+     genuinely ready.
