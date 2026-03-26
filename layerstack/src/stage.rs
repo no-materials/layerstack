@@ -274,6 +274,13 @@ impl Stage {
                 // Spec: AOUSD Core §12.3 (value blocking).
                 None
             }
+            FieldValue::Value(Value::Array(_)) | FieldValue::Value(Value::ArrayEdit(_)) => {
+                let property_type = index.property_type_for(&field);
+                resolve_array_value_chain(opinions, None, property_type).map(|value| Resolved {
+                    value: ResolvedValue::Scalar(value),
+                    provenance: self.provenance_for(field, strongest),
+                })
+            }
             FieldValue::Value(Value::Dictionary(_)) => {
                 // Dictionary combining: merge all dictionary opinions.
                 // Spec: AOUSD Core §6.6.2.1, §12.2.5.
@@ -342,6 +349,18 @@ impl Stage {
     ) -> Option<Resolved<Value>> {
         let index = self.prims.get(&prim)?;
         let opinions = index.opinions_by_field.get(&field)?;
+
+        if opinions.iter().any(opinion_can_yield_array_family) {
+            let property_type = index.property_type_for(&field);
+            if let Some(value) =
+                resolve_array_value_at_time_chain(opinions, time, interp, property_type)
+            {
+                return Some(Resolved {
+                    value,
+                    provenance: self.provenance_for(field, opinions.first()?),
+                });
+            }
+        }
 
         // Per §12.3: check each spec in strength order for timeSamples first,
         // then fall back to default value.
@@ -547,18 +566,46 @@ impl Stage {
         registry: &SchemaRegistry,
         api_schemas_token: Option<TokenId>,
     ) -> Option<Resolved<ResolvedValue>> {
-        // Try authored opinions first.
-        if let Some(resolved) = self.resolve_value(prim, field) {
-            return Some(resolved);
-        }
+        let authored = self
+            .prims
+            .get(&prim)
+            .and_then(|index| index.opinions_by_field.get(&field));
 
-        // No authored opinion — consult the schema registry.
         let type_name = self.resolve_type_name(prim, store);
         let applied = api_schemas_token
             .and_then(|tok| self.resolve_token_list(prim, tok))
             .map(|r| r.value)
             .unwrap_or_default();
-        let fallback = registry.resolve_fallback(type_name, &applied, field)?;
+        let fallback = registry.resolve_fallback(type_name, &applied, field);
+
+        if let Some(opinions) = authored {
+            let strongest = opinions.first()?;
+            if matches!(strongest.value, FieldValue::Value(Value::Blocked)) {
+                // fall through to schema fallback
+            } else if matches!(
+                strongest.value,
+                FieldValue::Value(Value::Array(_)) | FieldValue::Value(Value::ArrayEdit(_))
+            ) {
+                let property_type = self.prims.get(&prim)?.property_type_for(&field);
+                let fallback_value = match fallback.as_ref() {
+                    Some(FieldValue::Value(value)) if is_array_family_value(value) => Some(value),
+                    _ => None,
+                };
+                if let Some(value) =
+                    resolve_array_value_chain(opinions, fallback_value, property_type)
+                {
+                    return Some(Resolved {
+                        value: ResolvedValue::Scalar(value),
+                        provenance: self.provenance_for(field, strongest),
+                    });
+                }
+            } else if let Some(resolved) = self.resolve_value(prim, field) {
+                return Some(resolved);
+            }
+        }
+
+        // No authored opinion — consult the schema registry.
+        let fallback = fallback?;
 
         Some(Resolved {
             value: match fallback {
@@ -757,6 +804,121 @@ fn lerp_round(v: f64) -> f64 {
     if v >= 0.0 { v + 0.5 } else { v - 0.5 }
 }
 
+fn resolve_array_value_chain(
+    opinions: &[Opinion],
+    fallback: Option<&Value>,
+    property_type: Option<&crate::property::PropertyType>,
+) -> Option<Value> {
+    let mut acc: Option<Value> = None;
+
+    for opinion in opinions {
+        match &opinion.value {
+            FieldValue::Value(Value::Blocked) => return None,
+            FieldValue::Value(value) if is_array_family_value(value) => {
+                acc = match acc {
+                    Some(strong) => compose_array_value_over(&strong, value.clone(), property_type),
+                    None => Some(value.clone()),
+                };
+                if matches!(acc, Some(Value::Array(_))) {
+                    break;
+                }
+            }
+            FieldValue::Value(_) => break,
+            _ => {}
+        }
+    }
+
+    if let Some(fallback) = fallback
+        && !matches!(acc, Some(Value::Array(_)))
+    {
+        acc = match acc {
+            Some(strong) => compose_array_value_over(&strong, fallback.clone(), property_type),
+            None => Some(fallback.clone()),
+        };
+    }
+
+    materialize_array_value(acc, property_type)
+}
+
+fn resolve_array_value_at_time_chain(
+    opinions: &[Opinion],
+    time: f64,
+    interp: InterpolationType,
+    property_type: Option<&crate::property::PropertyType>,
+) -> Option<Value> {
+    let mut acc: Option<Value> = None;
+
+    for opinion in opinions {
+        let weak = match &opinion.value {
+            FieldValue::Value(Value::Blocked) => return None,
+            FieldValue::Value(value) if is_array_family_value(value) => Some(value.clone()),
+            FieldValue::TimeSamples(samples) => {
+                let mapped_time = opinion.layer_offset.map_time(time);
+                interpolate_samples(samples, mapped_time, interp).filter(is_array_family_value)
+            }
+            _ => None,
+        };
+
+        let Some(weak) = weak else {
+            continue;
+        };
+
+        acc = match acc {
+            Some(strong) => compose_array_value_over(&strong, weak, property_type),
+            None => Some(weak),
+        };
+
+        if matches!(acc, Some(Value::Array(_))) {
+            break;
+        }
+    }
+
+    materialize_array_value(acc, property_type)
+}
+
+fn compose_array_value_over(
+    strong: &Value,
+    weak: Value,
+    property_type: Option<&crate::property::PropertyType>,
+) -> Option<Value> {
+    match (strong, weak) {
+        (Value::Array(items), _) => Some(Value::Array(items.clone())),
+        (Value::ArrayEdit(edit), Value::Array(items)) => {
+            Some(Value::Array(edit.compose_over_array(&items, property_type)))
+        }
+        (Value::ArrayEdit(edit), Value::ArrayEdit(weak_edit)) => {
+            Some(Value::ArrayEdit(edit.compose_over(&weak_edit)))
+        }
+        _ => None,
+    }
+}
+
+fn materialize_array_value(
+    value: Option<Value>,
+    property_type: Option<&crate::property::PropertyType>,
+) -> Option<Value> {
+    match value {
+        Some(Value::ArrayEdit(edit)) => {
+            Some(Value::Array(edit.compose_over_array(&[], property_type)))
+        }
+        other => other,
+    }
+}
+
+fn opinion_can_yield_array_family(opinion: &Opinion) -> bool {
+    match &opinion.value {
+        FieldValue::Value(value) => is_array_family_value(value),
+        FieldValue::TimeSamples(samples) => samples
+            .iter()
+            .any(|(_, value)| is_array_family_value(value)),
+        _ => false,
+    }
+}
+
+fn is_array_family_value(value: &Value) -> bool {
+    matches!(value, Value::Array(_) | Value::ArrayEdit(_))
+}
+
 /// Convert a spline evaluation result to the appropriate [`Value`] type
 /// based on the spline's data type.
 #[allow(
@@ -805,5 +967,132 @@ fn half_from_f64(v: f64) -> u16 {
         }
     } else {
         (sign | ((exp as u32) << 10) | (frac >> 13)) as u16
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        LayerOffset, OpinionKey,
+        array_edit::{ArrayEdit, ArrayEditOp, ArrayEditOperand, ArrayIndex},
+        interner::TokenInterner,
+        path::{Path, PathInterner},
+        property::PropertyType,
+    };
+    use alloc::sync::Arc;
+    use alloc::vec;
+
+    fn array_value(values: &[i32]) -> Value {
+        Value::Array(values.iter().copied().map(Value::Int).collect())
+    }
+
+    fn int_array_type() -> PropertyType {
+        PropertyType::new(Arc::<str>::from("int"), true, Value::Int(0))
+    }
+
+    fn test_key(layer: LayerId, spec_path: PathId) -> OpinionKey {
+        OpinionKey {
+            is_local: true,
+            arc_kind: crate::prim_index::ArcKind::Local,
+            nested_arc_kind: None,
+            namespace_depth: 1,
+            authored: true,
+            arc_list_index: 0,
+            layer_strength: 0,
+            layer_id: layer,
+            spec_path,
+        }
+    }
+
+    #[test]
+    fn resolves_sparse_array_edit_over_dense_default() {
+        let mut tokens = TokenInterner::default();
+        let mut paths = PathInterner::default();
+        let prim = paths.intern(Path::parse_absolute("/A", &mut tokens).expect("valid path"));
+        let field = tokens.intern("x");
+
+        let mut index = PrimIndex::default();
+        let key = test_key(LayerId(1), prim);
+        index.add_property_type(field, key, int_array_type());
+        index.add_opinion(Opinion {
+            key,
+            field,
+            value: FieldValue::Value(Value::ArrayEdit(ArrayEdit {
+                ops: vec![ArrayEditOp::Write {
+                    src: ArrayEditOperand::Literal(Value::Int(9)),
+                    index: ArrayIndex::Position(0),
+                }],
+            })),
+            layer_offset: LayerOffset::IDENTITY,
+        });
+        index.add_opinion(Opinion {
+            key: OpinionKey {
+                layer_strength: 1,
+                ..key
+            },
+            field,
+            value: FieldValue::Value(array_value(&[1, 2])),
+            layer_offset: LayerOffset::IDENTITY,
+        });
+
+        let stage = Stage::from_parts(HashMap::from([(prim, index)]), HashMap::new(), false, None);
+        let resolved = stage.resolve_field(prim, field).expect("resolved value");
+        assert_eq!(resolved.value, array_value(&[9, 2]));
+    }
+
+    #[test]
+    fn resolves_time_sampled_sparse_array_edits() {
+        let mut tokens = TokenInterner::default();
+        let mut paths = PathInterner::default();
+        let prim = paths.intern(Path::parse_absolute("/A", &mut tokens).expect("valid path"));
+        let field = tokens.intern("x");
+
+        let identity = Value::ArrayEdit(ArrayEdit::default());
+        let override_sample = Value::ArrayEdit(ArrayEdit {
+            ops: vec![ArrayEditOp::Write {
+                src: ArrayEditOperand::Literal(Value::Int(9)),
+                index: ArrayIndex::Position(0),
+            }],
+        });
+
+        let mut index = PrimIndex::default();
+        let key = test_key(LayerId(1), prim);
+        index.add_property_type(field, key, int_array_type());
+        index.add_opinion(Opinion {
+            key,
+            field,
+            value: FieldValue::TimeSamples(vec![
+                (0.0, identity.clone()),
+                (2.0, override_sample),
+                (3.0, identity),
+            ]),
+            layer_offset: LayerOffset::IDENTITY,
+        });
+        index.add_opinion(Opinion {
+            key: OpinionKey {
+                layer_strength: 1,
+                ..key
+            },
+            field,
+            value: FieldValue::Value(array_value(&[1, 2])),
+            layer_offset: LayerOffset::IDENTITY,
+        });
+
+        let stage = Stage::from_parts(HashMap::from([(prim, index)]), HashMap::new(), false, None);
+        assert_eq!(
+            stage
+                .resolve_value_at_time(prim, field, 2.5, InterpolationType::Held)
+                .expect("resolved override")
+                .value,
+            array_value(&[9, 2])
+        );
+        assert_eq!(
+            stage
+                .resolve_value_at_time(prim, field, 3.5, InterpolationType::Held)
+                .expect("resolved reset")
+                .value,
+            array_value(&[1, 2])
+        );
     }
 }
