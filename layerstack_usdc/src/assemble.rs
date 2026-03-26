@@ -27,7 +27,7 @@ use layerstack::listop::ListOp;
 use layerstack::path::{Path, PathId, PathInterner};
 #[cfg(feature = "experimental_sparse_array_edits")]
 use layerstack::{ArrayEdit, ArrayEditOp, ArrayEditOperand, ArrayIndex};
-use layerstack::{AssetResolver, PropertyType, ResolvedAsset};
+use layerstack::{AssetResolver, PropertyType, ReferenceTarget, ResolvedAsset};
 
 use crate::error::UsdcError;
 use crate::section::CrateSections;
@@ -241,6 +241,11 @@ impl AssembleCtx<'_> {
                 }
                 "primOrder" => {
                     prim_order = Some(self.extract_token_names(value));
+                }
+                "defaultPrim" => {
+                    if let CrateValue::Token(name) = value {
+                        layer.default_prim = Some(self.tokens.intern(name));
+                    }
                 }
                 _ => {
                     // Other pseudo-root fields (defaultPrim, doc, etc.)
@@ -1204,7 +1209,7 @@ impl AssembleCtx<'_> {
                 return None;
             }
 
-            let (layer, prim_path_id) = if !asset_path.is_empty() {
+            let (layer, target) = if !asset_path.is_empty() {
                 let resolved = self.resolve_asset(&asset_path);
                 let lid = resolved
                     .as_ref()
@@ -1215,22 +1220,26 @@ impl AssembleCtx<'_> {
                 {
                     self.resolved_layers.push(layer);
                 }
-                let pid = if !prim_path.is_empty() {
+                let target = if !prim_path.is_empty() {
                     Path::parse_absolute(&prim_path, self.tokens)
                         .ok()
-                        .map(|p| self.paths.intern(p))
-                        .unwrap_or_else(|| self.paths.intern(Path::root()))
+                        .map(|p| ReferenceTarget::Prim(self.paths.intern(p)))
+                        .unwrap_or(ReferenceTarget::DefaultPrim)
                 } else {
-                    self.paths.intern(Path::root())
+                    ReferenceTarget::DefaultPrim
                 };
-                (lid, pid)
+                (lid, target)
             } else {
                 // Internal reference (same layer).
-                let pid = Path::parse_absolute(&prim_path, self.tokens)
-                    .ok()
-                    .map(|p| self.paths.intern(p))
-                    .unwrap_or_else(|| self.paths.intern(Path::root()));
-                (self.layer_id, pid)
+                let target = if !prim_path.is_empty() {
+                    Path::parse_absolute(&prim_path, self.tokens)
+                        .ok()
+                        .map(|p| ReferenceTarget::Prim(self.paths.intern(p)))
+                        .unwrap_or(ReferenceTarget::DefaultPrim)
+                } else {
+                    ReferenceTarget::DefaultPrim
+                };
+                (self.layer_id, target)
             };
 
             let asset = if asset_path.is_empty() {
@@ -1241,7 +1250,7 @@ impl AssembleCtx<'_> {
 
             Some(Reference {
                 layer,
-                prim_path: prim_path_id,
+                target,
                 asset,
                 layer_offset: LayerOffset {
                     offset: layer_offset_val,

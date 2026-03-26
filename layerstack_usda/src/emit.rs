@@ -27,7 +27,7 @@ use layerstack::listop::ListOp;
 use layerstack::path::{Path, PathId, PathInterner};
 use layerstack::{
     ArrayEdit, ArrayEditOp, ArrayEditOperand, ArrayIndex, AssetResolver, PropertyType,
-    ResolvedAsset,
+    ReferenceTarget, ResolvedAsset,
 };
 
 use crate::ast;
@@ -120,8 +120,15 @@ impl EmitCtx<'_> {
                 ast::LayerMeta::Relocates(_) => {
                     // Relocates are not yet supported in layerstack v0.1.
                 }
-                ast::LayerMeta::Doc(_) | ast::LayerMeta::Custom(_) => {
+                ast::LayerMeta::Doc(_) => {
                     // Layer-level metadata fields don't map to PrimSpec.
+                }
+                ast::LayerMeta::Custom(entry) => {
+                    if entry.key == "defaultPrim"
+                        && let ast::MetadataValue::String(name) = &entry.value
+                    {
+                        layer.default_prim = Some(self.tokens.intern(name));
+                    }
                 }
             }
         }
@@ -635,6 +642,9 @@ impl EmitCtx<'_> {
                 .variants
                 .entry(nested_branch_tok)
                 .or_default();
+            if variant_spec.outer_selections.is_empty() {
+                variant_spec.outer_selections = outer_context.to_vec();
+            }
 
             // Process branch metadata.
             self.emit_variant_branch_metadata(&branch.metadata, prim_path, variant_spec);
@@ -982,12 +992,11 @@ impl EmitCtx<'_> {
             self.layer_id
         };
 
-        let prim_path = if let Some(path_str) = arc_ref.prim_path {
+        let target = if let Some(path_str) = arc_ref.prim_path {
             let path = Path::parse_absolute(path_str, self.tokens).ok()?;
-            self.paths.intern(path)
+            ReferenceTarget::Prim(self.paths.intern(path))
         } else {
-            // Default prim path (root).
-            self.paths.intern(Path::root())
+            ReferenceTarget::DefaultPrim
         };
 
         let asset_str = arc_ref.asset.map(String::from);
@@ -999,7 +1008,7 @@ impl EmitCtx<'_> {
 
         Some(Reference {
             layer: layer_id,
-            prim_path,
+            target,
             asset: asset_str,
             layer_offset,
         })

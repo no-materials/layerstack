@@ -19,6 +19,7 @@ use crate::{
     path::PathId,
     prim_index::{Opinion, PrimIndex},
     schema::SchemaRegistry,
+    spec_path::SpecPath,
     spline::{SplineData, SplineDataType},
     value_resolution::{
         SparseQuery, SparseResolveResult, interpolate_samples, resolve_sparse_value,
@@ -26,12 +27,12 @@ use crate::{
 };
 
 /// Provenance information for resolved values.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Provenance {
     /// The layer whose opinion was strongest.
     pub layer: LayerId,
     /// The spec path in that layer.
-    pub spec_path: PathId,
+    pub spec_path: SpecPath,
     /// The field that was resolved.
     pub field: TokenId,
 }
@@ -464,15 +465,15 @@ impl Stage {
     ///
     /// Spec: AOUSD Core §11 (stage population) and §10.4 (strength ordering).
     #[must_use]
-    pub fn prim_stack(&self, prim: PathId) -> Option<Vec<(LayerId, PathId)>> {
+    pub fn prim_stack(&self, prim: PathId) -> Option<Vec<(LayerId, SpecPath)>> {
         use hashbrown::HashSet;
 
         let index = self.prims.get(&prim)?;
         let mut out = Vec::new();
-        let mut seen_pairs = HashSet::<(LayerId, PathId)>::new();
+        let mut seen_pairs = HashSet::<(LayerId, SpecPath)>::new();
         for key in &index.sources {
-            let pair = (key.layer_id, key.spec_path);
-            if seen_pairs.insert(pair) {
+            let pair = (key.layer_id, key.spec_path.clone());
+            if seen_pairs.insert(pair.clone()) {
                 out.push(pair);
             }
         }
@@ -504,7 +505,7 @@ impl Stage {
             let Some(layer) = store.layer(key.layer_id) else {
                 continue;
             };
-            let Some(spec) = layer.prims.get(&key.spec_path) else {
+            let Some(spec) = layer.prims.get(&key.lookup_path) else {
                 continue;
             };
             match spec.specifier {
@@ -551,7 +552,7 @@ impl Stage {
             let Some(layer) = store.layer(key.layer_id) else {
                 continue;
             };
-            let Some(spec) = layer.prims.get(&key.spec_path) else {
+            let Some(spec) = layer.prims.get(&key.lookup_path) else {
                 continue;
             };
             if let Some(tn) = spec.type_name {
@@ -701,7 +702,7 @@ impl Stage {
     fn provenance_for(&self, field: TokenId, strongest: &Opinion) -> Option<Provenance> {
         self.with_provenance.then_some(Provenance {
             layer: strongest.key.layer_id,
-            spec_path: strongest.key.spec_path,
+            spec_path: strongest.key.spec_path.clone(),
             field,
         })
     }
@@ -797,6 +798,7 @@ mod tests {
         interner::TokenInterner,
         path::{Path, PathInterner},
         property::PropertyType,
+        spec_path::SpecPath,
     };
     use alloc::sync::Arc;
     use alloc::vec;
@@ -809,7 +811,10 @@ mod tests {
         PropertyType::new(Arc::<str>::from("int"), true, Value::Int(0))
     }
 
-    fn test_key(layer: LayerId, spec_path: PathId) -> OpinionKey {
+    fn test_key(layer: LayerId, lookup_path: PathId) -> OpinionKey {
+        let mut tokens = TokenInterner::default();
+        let mut paths = PathInterner::default();
+        let spec_path = SpecPath::parse("/A", &mut tokens, &mut paths).expect("spec path");
         OpinionKey {
             is_local: true,
             arc_kind: crate::prim_index::ArcKind::Local,
@@ -819,6 +824,7 @@ mod tests {
             arc_list_index: 0,
             layer_strength: 0,
             layer_id: layer,
+            lookup_path,
             spec_path,
         }
     }
@@ -832,9 +838,9 @@ mod tests {
 
         let mut index = PrimIndex::default();
         let key = test_key(LayerId(1), prim);
-        index.add_property_type(field, key, int_array_type());
+        index.add_property_type(field, key.clone(), int_array_type());
         index.add_opinion(Opinion {
-            key,
+            key: key.clone(),
             field,
             value: FieldValue::Value(Value::ArrayEdit(ArrayEdit {
                 ops: vec![ArrayEditOp::Write {
@@ -847,7 +853,7 @@ mod tests {
         index.add_opinion(Opinion {
             key: OpinionKey {
                 layer_strength: 1,
-                ..key
+                ..key.clone()
             },
             field,
             value: FieldValue::Value(array_value(&[1, 2])),
@@ -876,9 +882,9 @@ mod tests {
 
         let mut index = PrimIndex::default();
         let key = test_key(LayerId(1), prim);
-        index.add_property_type(field, key, int_array_type());
+        index.add_property_type(field, key.clone(), int_array_type());
         index.add_opinion(Opinion {
-            key,
+            key: key.clone(),
             field,
             value: FieldValue::TimeSamples(vec![
                 (0.0, identity.clone()),
@@ -890,7 +896,7 @@ mod tests {
         index.add_opinion(Opinion {
             key: OpinionKey {
                 layer_strength: 1,
-                ..key
+                ..key.clone()
             },
             field,
             value: FieldValue::Value(array_value(&[1, 2])),

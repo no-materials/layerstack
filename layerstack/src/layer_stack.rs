@@ -103,16 +103,19 @@ mod tests {
         store.insert_layer(Layer {
             id: LayerId(1),
             sublayers: subs(&[2, 3]),
+            default_prim: None,
             prims: HashMap::new(),
         });
         store.insert_layer(Layer {
             id: LayerId(2),
             sublayers: subs(&[3]),
+            default_prim: None,
             prims: HashMap::new(),
         });
         store.insert_layer(Layer {
             id: LayerId(3),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         });
 
@@ -131,16 +134,19 @@ mod tests {
         store.insert_layer(Layer {
             id: LayerId(1),
             sublayers: subs(&[2]),
+            default_prim: None,
             prims: HashMap::new(),
         });
         store.insert_layer(Layer {
             id: LayerId(2),
             sublayers: subs(&[3]),
+            default_prim: None,
             prims: HashMap::new(),
         });
         store.insert_layer(Layer {
             id: LayerId(3),
             sublayers: subs(&[2]),
+            default_prim: None,
             prims: HashMap::new(),
         });
 
@@ -162,6 +168,7 @@ mod tests {
                     scale: 1.0,
                 },
             }],
+            default_prim: None,
             prims: HashMap::new(),
         });
         store.insert_layer(Layer {
@@ -173,11 +180,13 @@ mod tests {
                     scale: 1.0,
                 },
             }],
+            default_prim: None,
             prims: HashMap::new(),
         });
         store.insert_layer(Layer {
             id: LayerId(3),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         });
 
@@ -215,6 +224,7 @@ mod tests {
                     scale: 2.0,
                 },
             }],
+            default_prim: None,
             prims: HashMap::new(),
         });
         store.insert_layer(Layer {
@@ -226,11 +236,13 @@ mod tests {
                     scale: 3.0,
                 },
             }],
+            default_prim: None,
             prims: HashMap::new(),
         });
         store.insert_layer(Layer {
             id: LayerId(3),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         });
 

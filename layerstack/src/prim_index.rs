@@ -16,6 +16,7 @@ use crate::{
     interner::TokenId,
     path::PathId,
     property::PropertyType,
+    spec_path::SpecPath,
 };
 
 /// Composition arc kind (LIVERPS ordering).
@@ -54,7 +55,7 @@ impl ArcKind {
 /// A comparable strength key for a single authored opinion.
 ///
 /// Spec: AOUSD Core §10.4 (strength ordering and tie-breakers).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpinionKey {
     /// `true` for local opinions (layer stack), `false` for opinions introduced by arcs.
     pub is_local: bool,
@@ -82,11 +83,21 @@ pub struct OpinionKey {
     pub layer_strength: u16,
     /// Source layer identifier.
     pub layer_id: LayerId,
-    /// Source spec path identifier.
-    pub spec_path: PathId,
+    /// Concrete prim path used to look up the authored `PrimSpec`.
+    pub lookup_path: PathId,
+    /// Source spec path identity used for composed provenance.
+    pub spec_path: SpecPath,
 }
 
 impl OpinionKey {
+    /// Returns a clone with a different provenance path.
+    #[must_use]
+    pub fn with_spec_path(&self, spec_path: SpecPath) -> Self {
+        let mut out = self.clone();
+        out.spec_path = spec_path;
+        out
+    }
+
     /// Compares keys with "strongest first" ordering.
     #[must_use]
     pub fn cmp_strongest_first(&self, other: &Self) -> Ordering {
@@ -169,7 +180,6 @@ pub(crate) struct PrimIndex {
 
 impl PrimIndex {
     pub(crate) fn add_opinion(&mut self, opinion: Opinion) {
-        self.sources.push(opinion.key);
         self.opinions_by_field
             .entry(opinion.field)
             .or_default()
@@ -219,7 +229,11 @@ impl PrimIndex {
 mod tests {
     use super::*;
     use crate::doc::LayerId;
-    use crate::path::PathId;
+    use crate::{
+        path::{Path, PathId, PathInterner},
+        spec_path::SpecPath,
+    };
+    use alloc::format;
     use alloc::vec::Vec;
 
     fn key(
@@ -233,6 +247,10 @@ mod tests {
         layer_id: u64,
         spec_path: u32,
     ) -> OpinionKey {
+        let mut paths = PathInterner::default();
+        let mut tokens = crate::interner::TokenInterner::default();
+        let path_str = format!("/Spec{spec_path}");
+        let path_id = paths.intern(Path::parse_absolute(&path_str, &mut tokens).expect("path"));
         OpinionKey {
             is_local,
             arc_kind,
@@ -242,13 +260,14 @@ mod tests {
             arc_list_index,
             layer_strength,
             layer_id: LayerId(layer_id),
-            spec_path: PathId::from_raw(spec_path),
+            lookup_path: PathId::from_raw(spec_path),
+            spec_path: SpecPath::from_prim_path(path_id, &paths),
         }
     }
 
-    fn assert_stronger(a: OpinionKey, b: OpinionKey) {
-        assert_eq!(a.cmp_strongest_first(&b), Ordering::Less);
-        assert_eq!(b.cmp_strongest_first(&a), Ordering::Greater);
+    fn assert_stronger(a: &OpinionKey, b: &OpinionKey) {
+        assert_eq!(a.cmp_strongest_first(b), Ordering::Less);
+        assert_eq!(b.cmp_strongest_first(a), Ordering::Greater);
     }
 
     #[test]
@@ -256,7 +275,7 @@ mod tests {
         // Spec: local opinions are stronger than opinions introduced by arcs.
         let local = key(true, ArcKind::Local, None, 1, true, 0, 5, 10, 1);
         let remote = key(false, ArcKind::Inherits, None, 999, false, 999, 0, 0, 0);
-        assert_stronger(local, remote);
+        assert_stronger(&local, &remote);
     }
 
     #[test]
@@ -339,11 +358,11 @@ mod tests {
             spec_path,
         );
 
-        assert_stronger(inherits, variants);
-        assert_stronger(variants, relocates);
-        assert_stronger(relocates, references);
-        assert_stronger(references, payloads);
-        assert_stronger(payloads, specializes);
+        assert_stronger(&inherits, &variants);
+        assert_stronger(&variants, &relocates);
+        assert_stronger(&relocates, &references);
+        assert_stronger(&references, &payloads);
+        assert_stronger(&payloads, &specializes);
     }
 
     #[test]
@@ -351,7 +370,7 @@ mod tests {
         // Spec: deeper namespace is stronger when arc kind ties.
         let shallow = key(false, ArcKind::References, None, 1, true, 0, 0, 0, 0);
         let deep = key(false, ArcKind::References, None, 2, true, 0, 0, 0, 0);
-        assert_stronger(deep, shallow);
+        assert_stronger(&deep, &shallow);
     }
 
     #[test]
@@ -359,7 +378,7 @@ mod tests {
         // Spec: authored arc beats implied.
         let implied = key(false, ArcKind::References, None, 1, false, 0, 0, 0, 0);
         let authored = key(false, ArcKind::References, None, 1, true, 0, 0, 0, 0);
-        assert_stronger(authored, implied);
+        assert_stronger(&authored, &implied);
     }
 
     #[test]
@@ -367,7 +386,7 @@ mod tests {
         // Spec: otherwise, list order of arcs.
         let first = key(false, ArcKind::References, None, 1, true, 0, 0, 0, 0);
         let second = key(false, ArcKind::References, None, 1, true, 1, 0, 0, 0);
-        assert_stronger(first, second);
+        assert_stronger(&first, &second);
     }
 
     #[test]
@@ -375,18 +394,37 @@ mod tests {
         // Spec: layer stack order participates in tie-breaking.
         let stronger_layer = key(true, ArcKind::Local, None, 1, true, 0, 0, 0, 0);
         let weaker_layer = key(true, ArcKind::Local, None, 1, true, 0, 1, 0, 0);
-        assert_stronger(stronger_layer, weaker_layer);
+        assert_stronger(&stronger_layer, &weaker_layer);
     }
 
     #[test]
     fn stable_ids_break_remaining_ties() {
         let a = key(true, ArcKind::Local, None, 1, true, 0, 0, 1, 1);
         let b = key(true, ArcKind::Local, None, 1, true, 0, 0, 2, 0);
-        assert_stronger(a, b);
+        assert_stronger(&a, &b);
 
-        let c = key(true, ArcKind::Local, None, 1, true, 0, 0, 1, 1);
-        let d = key(true, ArcKind::Local, None, 1, true, 0, 0, 1, 2);
-        assert_stronger(c, d);
+        let mut tokens = crate::interner::TokenInterner::default();
+        let mut paths = PathInterner::default();
+        let path_c = paths.intern(Path::parse_absolute("/A", &mut tokens).expect("path"));
+        let path_d = paths.intern(Path::parse_absolute("/B", &mut tokens).expect("path"));
+        let c = OpinionKey {
+            is_local: true,
+            arc_kind: ArcKind::Local,
+            nested_arc_kind: None,
+            namespace_depth: 1,
+            authored: true,
+            arc_list_index: 0,
+            layer_strength: 0,
+            layer_id: LayerId(1),
+            lookup_path: path_c,
+            spec_path: SpecPath::from_prim_path(path_c, &paths),
+        };
+        let d = OpinionKey {
+            spec_path: SpecPath::from_prim_path(path_d, &paths),
+            lookup_path: path_d,
+            ..c.clone()
+        };
+        assert_stronger(&c, &d);
     }
 
     #[test]
@@ -424,6 +462,6 @@ mod tests {
             1,
             1,
         );
-        assert_stronger(base, nested);
+        assert_stronger(&base, &nested);
     }
 }

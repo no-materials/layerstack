@@ -13,7 +13,7 @@ use crate::{
     arcs::{
         collect_all_variant_branch_payloads, collect_all_variant_branch_references,
         collect_all_variant_child_references, resolve_inherits_for_prim, resolve_payloads_for_prim,
-        resolve_references_for_prim, resolve_specializes_for_prim,
+        resolve_reference_target_path, resolve_references_for_prim, resolve_specializes_for_prim,
     },
     doc::LayerStore,
     doc::{LayerId, Reference},
@@ -261,12 +261,15 @@ fn expand_reference_paths(
     visited: &mut HashSet<(PathId, LayerId, PathId)>,
     visited_inherits: &mut HashSet<(PathId, PathId)>,
 ) {
-    if !visited.insert((dest_root, reference.layer, reference.prim_path)) {
+    let Some(reference_path) = resolve_reference_target_path(store, &reference) else {
+        return;
+    };
+    if !visited.insert((dest_root, reference.layer, reference_path)) {
         return;
     }
 
     let remote_stack = LayerStack::gather(store, reference.layer);
-    let target = store.paths().resolve(reference.prim_path).clone();
+    let target = store.paths().resolve(reference_path).clone();
     let base = store.paths().resolve(dest_root).clone();
 
     let mut remote_paths: Vec<PathId> = remote_stack

@@ -34,6 +34,7 @@ pub mod population;
 pub mod prim_index;
 pub mod property;
 pub mod schema;
+pub mod spec_path;
 pub mod spline;
 pub mod stage;
 mod value_resolution;
@@ -45,8 +46,8 @@ pub use asset::{AssetResolveError, AssetResolver, ResolvedAsset};
 pub use dependency_map::ArcDependency;
 pub use doc::{
     FieldEntry, FieldValue, InMemoryStore, InterpolationType, Layer, LayerId, LayerOffset,
-    PrimSpec, Reference, Specifier, SublayerEntry, Value, VariantSetSpec, VariantSpec,
-    combine_dictionaries, combine_dictionary_chain, get_field, get_field_mut,
+    PrimSpec, Reference, ReferenceTarget, Specifier, SublayerEntry, Value, VariantSetSpec,
+    VariantSpec, combine_dictionaries, combine_dictionary_chain, get_field, get_field_mut,
     insert_field_if_absent, insert_property_field_if_absent, set_field_vec, set_property_field_vec,
 };
 pub use interner::{TokenId, TokenInterner};
@@ -56,6 +57,7 @@ pub use path::{Path, PathId, PathInterner};
 pub use prim_index::{ArcKind, Opinion, OpinionKey};
 pub use property::PropertyType;
 pub use schema::{PropertyDefinition, SchemaDefinition, SchemaRegistry};
+pub use spec_path::{SpecComponent, SpecPath, SpecPathError};
 pub use spline::SplineData;
 pub use stage::{Resolved, ResolvedValue, Stage, StageOptions};
 

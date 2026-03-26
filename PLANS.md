@@ -74,3 +74,72 @@
 6. Stop there
    - Do not force a second sparse family into this branch unless one is
      genuinely ready.
+
+## Spec Identity + defaultPrim Execution Plan
+
+### Fence
+
+`Path` owns concrete prim namespace paths. It explicitly does not own
+variant-qualified opinion provenance or implicit arc targets; those belong to a
+separate spec-identity layer and to reference/payload target resolution.
+
+### Goals
+
+- Add a first-class `SpecPath` identity model for composed opinion sources.
+- Separate provenance identity from the concrete prim path used to look up
+  authored `PrimSpec` data.
+- Preserve variant-qualified source identities through `Stage` inspection APIs
+  and conformance tests.
+- Model references/payloads with an explicit authored target kind so omitted
+  prim targets remain distinguishable from explicit `</Foo>` or `/`.
+- Add `defaultPrim` layer metadata to USDA/USDC ingestion and compose omitted
+  reference/payload targets through it.
+
+### Non-goals
+
+- Generalize `Path` into a universal spec/property/variant path syntax type.
+- Implement relocates or value clips in this branch.
+- Add a plugin-style provenance system.
+
+### Migration Note
+
+- Public API changes are expected in `layerstack`:
+  - `OpinionKey::spec_path` and `Stage::prim_stack()` will expose `SpecPathId`
+    instead of `PathId`.
+  - `Stage` will expose composed `SpecPath` inspection helpers.
+  - `Reference`/payload arc targets will move from always-concrete `PathId` to
+    an explicit authored target enum that can represent implicit `defaultPrim`.
+  - `Layer` will preserve `default_prim` metadata.
+
+### Phases
+
+1. Spec identity foundation
+   - Add `spec_path.rs` with `SpecPath`, `SpecPathId`, and `SpecPathInterner`.
+   - Thread a concrete lookup prim path separately from spec provenance through
+     `OpinionKey`.
+2. Composition integration
+   - Intern spec identities while composing local, variant, inherit, reference,
+     payload, and specializes opinions.
+   - Update `Stage` inspection APIs and conformance harnesses to use the new
+     spec identities directly.
+3. Arc target modeling
+   - Add an explicit reference target enum for authored prim-path vs implicit
+     `defaultPrim`.
+   - Preserve `defaultPrim` metadata on layers.
+4. USDA + USDC
+   - Parse/emit layer `defaultPrim` metadata in USDA.
+   - Decode USDC pseudo-root `defaultPrim` and omitted arc targets into the new
+     model.
+5. Validation
+   - Unignore the variant-qualified source identity conformance cases.
+   - Add focused `defaultPrim` tests and reduce ignored composition cases to
+     narrower remaining gaps.
+
+### Risks
+
+- Variant provenance is currently intertwined with actual prim lookup paths in
+  `OpinionKey`; this refactor touches most composition entry points.
+- `defaultPrim` behavior must preserve the authored distinction between an
+  omitted target and an explicit prim path.
+- USDC pseudo-root metadata is currently only partially assembled, so
+  `defaultPrim` support has to fit that code path cleanly.

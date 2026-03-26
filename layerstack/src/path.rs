@@ -129,6 +129,12 @@ impl Path {
         self.segments.last().copied()
     }
 
+    /// Returns the raw namespace segments.
+    #[must_use]
+    pub fn segments(&self) -> &[TokenId] {
+        &self.segments
+    }
+
     /// Formats this path as a string (e.g. `/Robot/Arm`).
     ///
     /// Requires a [`TokenInterner`] to resolve segment names.

@@ -76,6 +76,58 @@ fn reference_opinions_are_weaker_than_local() {
 }
 
 #[test]
+fn omitted_reference_target_resolves_through_default_prim() {
+    let mut store = InMemoryStore::default();
+
+    let field_x = store.tokens.intern("x");
+    let model = store.tokens.intern("Model");
+    let p = store.path("/P");
+    let model_path = store.path("/Model");
+
+    let mut root_layer = Layer::new(LayerId(1));
+    root_layer.insert_prim(
+        p,
+        PrimSpec::default().with_reference(Reference::to_default_prim(LayerId(2))),
+    );
+    store.insert_layer(root_layer);
+
+    let mut ref_layer = Layer::new(LayerId(2));
+    ref_layer.default_prim = Some(model);
+    ref_layer.insert_prim(model_path, PrimSpec::default().with_field(field_x, 7_i64));
+    store.insert_layer(ref_layer);
+
+    let stage = Stage::compose(&mut store, LayerId(1), StageOptions::default());
+    let resolved = stage.resolve_field(p, field_x).expect("field exists");
+    assert_eq!(resolved.value, Value::Int64(7));
+}
+
+#[test]
+fn omitted_payload_target_resolves_through_default_prim() {
+    let mut store = InMemoryStore::default();
+
+    let field_x = store.tokens.intern("x");
+    let model = store.tokens.intern("PayloadRoot");
+    let p = store.path("/P");
+    let model_path = store.path("/PayloadRoot");
+
+    let mut root_layer = Layer::new(LayerId(1));
+    root_layer.insert_prim(
+        p,
+        PrimSpec::default().with_payload(Reference::to_default_prim(LayerId(2))),
+    );
+    store.insert_layer(root_layer);
+
+    let mut payload_layer = Layer::new(LayerId(2));
+    payload_layer.default_prim = Some(model);
+    payload_layer.insert_prim(model_path, PrimSpec::default().with_field(field_x, 11_i64));
+    store.insert_layer(payload_layer);
+
+    let stage = Stage::compose(&mut store, LayerId(1), StageOptions::default());
+    let resolved = stage.resolve_field(p, field_x).expect("field exists");
+    assert_eq!(resolved.value, Value::Int64(11));
+}
+
+#[test]
 fn variants_selection_is_strength_ordered() {
     let mut store = InMemoryStore::default();
 

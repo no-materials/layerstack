@@ -558,11 +558,23 @@ impl From<LayerId> for SublayerEntry {
 
 /// A composition reference arc.
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReferenceTarget {
+    /// Target a concrete prim path.
+    Prim(PathId),
+    /// Target the referenced layer's `defaultPrim`.
+    ///
+    /// Spec: AOUSD Core §9 (asset resolution) and §10 (references/payloads)
+    /// allow omitted prim targets to resolve through layer metadata.
+    DefaultPrim,
+}
+
+/// A composition reference or payload arc.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reference {
     /// The referenced layer/document.
     pub layer: LayerId,
-    /// The referenced prim path within that layer/document.
-    pub prim_path: PathId,
+    /// The authored target within that layer/document.
+    pub target: ReferenceTarget,
     /// Optional debug name / URI.
     pub asset: Option<String>,
     /// Time offset applied across this reference boundary (§12.3.2.1).
@@ -574,7 +586,7 @@ impl Reference {
     pub fn new(layer: LayerId, prim_path: PathId) -> Self {
         Self {
             layer,
-            prim_path,
+            target: ReferenceTarget::Prim(prim_path),
             asset: None,
             layer_offset: LayerOffset::IDENTITY,
         }
@@ -584,7 +596,29 @@ impl Reference {
     pub fn with_asset(layer: LayerId, prim_path: PathId, asset: impl Into<String>) -> Self {
         Self {
             layer,
-            prim_path,
+            target: ReferenceTarget::Prim(prim_path),
+            asset: Some(asset.into()),
+            layer_offset: LayerOffset::IDENTITY,
+        }
+    }
+
+    /// Creates a reference that implicitly targets the referenced layer's
+    /// `defaultPrim`.
+    pub fn to_default_prim(layer: LayerId) -> Self {
+        Self {
+            layer,
+            target: ReferenceTarget::DefaultPrim,
+            asset: None,
+            layer_offset: LayerOffset::IDENTITY,
+        }
+    }
+
+    /// Creates an asset reference that implicitly targets the asset's
+    /// `defaultPrim`.
+    pub fn with_asset_default_prim(layer: LayerId, asset: impl Into<String>) -> Self {
+        Self {
+            layer,
+            target: ReferenceTarget::DefaultPrim,
             asset: Some(asset.into()),
             layer_offset: LayerOffset::IDENTITY,
         }
@@ -653,6 +687,12 @@ pub struct VariantSpec {
     /// When a variant branch header includes `variants = { string v2 = "b" }`,
     /// those selections apply to the owning prim when this variant is selected.
     pub variant_selections: HashMap<TokenId, TokenId>,
+    /// Outer selections required to reach this nested variant branch.
+    ///
+    /// Top-level branches leave this empty. Nested branches record the
+    /// selection chain leading to the branch so composed provenance can retain
+    /// the full variant-qualified source identity.
+    pub outer_selections: Vec<(TokenId, TokenId)>,
 }
 
 impl VariantSpec {
@@ -706,6 +746,9 @@ impl VariantSpec {
         }
         for (k, v) in other.variant_selections {
             self.variant_selections.entry(k).or_insert(v);
+        }
+        if self.outer_selections.is_empty() {
+            self.outer_selections = other.outer_selections;
         }
     }
 }
@@ -1002,6 +1045,11 @@ pub struct Layer {
     pub id: LayerId,
     /// Ordered sublayer includes. The layer itself is always stronger than its sublayers.
     pub sublayers: Vec<SublayerEntry>,
+    /// Canonical root-prim entry point for omitted reference/payload targets.
+    ///
+    /// Spec: AOUSD Core §10 (references/payloads) uses `defaultPrim` to resolve
+    /// asset targets when no explicit prim path is authored.
+    pub default_prim: Option<TokenId>,
     /// Prim specs keyed by prim path.
     pub prims: HashMap<PathId, PrimSpec>,
 }
@@ -1012,6 +1060,7 @@ impl Layer {
         Self {
             id,
             sublayers: Vec::new(),
+            default_prim: None,
             prims: HashMap::new(),
         }
     }

@@ -352,7 +352,11 @@ mod tests {
         PropertyType::new(Arc::<str>::from("int"), true, Value::Int(0))
     }
 
-    fn test_key(layer: LayerId, spec_path: PathId) -> OpinionKey {
+    fn test_key(layer: LayerId, lookup_path: PathId) -> OpinionKey {
+        let mut tokens = TokenInterner::default();
+        let mut paths = PathInterner::default();
+        let spec_path =
+            crate::spec_path::SpecPath::parse("/A", &mut tokens, &mut paths).expect("spec path");
         OpinionKey {
             is_local: true,
             arc_kind: ArcKind::Local,
@@ -362,6 +366,7 @@ mod tests {
             arc_list_index: 0,
             layer_strength: 0,
             layer_id: layer,
+            lookup_path,
             spec_path,
         }
     }

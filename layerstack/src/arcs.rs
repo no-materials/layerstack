@@ -10,12 +10,27 @@ use alloc::vec::Vec;
 use hashbrown::HashMap;
 
 use crate::{
-    doc::{LayerStore, Reference},
+    doc::{LayerStore, Reference, ReferenceTarget},
     interner::TokenId,
     layer_stack::LayerStack,
     listop::resolve_list_chain,
-    path::PathId,
+    path::{Path, PathId},
 };
+
+pub(crate) fn resolve_reference_target_path(
+    store: &dyn LayerStore,
+    reference: &Reference,
+) -> Option<PathId> {
+    match reference.target {
+        ReferenceTarget::Prim(path) => Some(path),
+        ReferenceTarget::DefaultPrim => {
+            let layer = store.layer(reference.layer)?;
+            let default_prim = layer.default_prim?;
+            let path = Path::root().join(&[default_prim]);
+            store.paths().lookup(&path)
+        }
+    }
+}
 
 pub(crate) fn resolve_inherits_for_prim(
     store: &dyn LayerStore,

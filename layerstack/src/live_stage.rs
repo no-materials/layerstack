@@ -294,6 +294,7 @@ mod tests {
         let mut layer = Layer {
             id: LayerId(1),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         let mut spec = PrimSpec::default();
@@ -318,6 +319,7 @@ mod tests {
         let mut layer = Layer {
             id: LayerId(1),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         layer.insert_prim(prim, PrimSpec::default());
@@ -337,6 +339,7 @@ mod tests {
         let mut layer = Layer {
             id: LayerId(1),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         let mut spec = PrimSpec::default();
@@ -376,6 +379,7 @@ mod tests {
         let mut layer = Layer {
             id: LayerId(1),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         layer.insert_prim(prim, PrimSpec::default());
@@ -411,6 +415,7 @@ mod tests {
         let mut root = Layer {
             id: LayerId(1),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         let mut p_spec = PrimSpec::default();
@@ -421,6 +426,7 @@ mod tests {
         let mut ref_layer = Layer {
             id: LayerId(2),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         let mut q_spec = PrimSpec::default();
@@ -465,6 +471,7 @@ mod tests {
         let mut layer2 = Layer {
             id: LayerId(2),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         let mut spec2 = PrimSpec::default();
@@ -475,6 +482,7 @@ mod tests {
         let mut layer1 = Layer {
             id: LayerId(1),
             sublayers: vec![SublayerEntry::new(LayerId(2))],
+            default_prim: None,
             prims: HashMap::new(),
         };
         let mut spec1 = PrimSpec::default();
@@ -530,6 +538,7 @@ mod tests {
         let mut layer = Layer {
             id: LayerId(1),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         // /Class_C defines x = 42.
@@ -582,6 +591,7 @@ mod tests {
         let mut layer1 = Layer {
             id: LayerId(1),
             sublayers: vec![SublayerEntry::new(LayerId(2))],
+            default_prim: None,
             prims: HashMap::new(),
         };
         let mut a_spec = PrimSpec::default();
@@ -592,6 +602,7 @@ mod tests {
         let mut layer2 = Layer {
             id: LayerId(2),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         let mut b_spec = PrimSpec::default();
@@ -639,6 +650,7 @@ mod tests {
         let mut layer = Layer {
             id: LayerId(1),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         let mut spec = PrimSpec::default();
@@ -679,6 +691,7 @@ mod tests {
         let mut root = Layer {
             id: LayerId(1),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         let mut p_spec = PrimSpec::default();
@@ -690,6 +703,7 @@ mod tests {
         let mut ref_layer = Layer {
             id: LayerId(2),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         let mut q_spec = PrimSpec::default();
@@ -729,6 +743,7 @@ mod tests {
         let mut layer = Layer {
             id: LayerId(1),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         let mut a_spec = PrimSpec::default();
@@ -777,6 +792,7 @@ mod tests {
         let mut layer = Layer {
             id: LayerId(1),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         let mut a_spec = PrimSpec::default();
@@ -828,6 +844,7 @@ mod tests {
         let mut layer1 = Layer {
             id: LayerId(1),
             sublayers: vec![SublayerEntry::new(LayerId(2))],
+            default_prim: None,
             prims: HashMap::new(),
         };
         let mut a_spec = PrimSpec::default();
@@ -838,6 +855,7 @@ mod tests {
         let mut layer2 = Layer {
             id: LayerId(2),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         let mut b_spec = PrimSpec::default();
@@ -868,6 +886,7 @@ mod tests {
         let mut layer = Layer {
             id: LayerId(1),
             sublayers: vec![],
+            default_prim: None,
             prims: HashMap::new(),
         };
         for &(prim, val) in &[(prim_a, 1), (prim_b, 2), (prim_c, 3)] {
