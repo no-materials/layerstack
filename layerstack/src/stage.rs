@@ -20,6 +20,9 @@ use crate::{
     prim_index::{Opinion, PrimIndex},
     schema::SchemaRegistry,
     spline::{SplineData, SplineDataType},
+    value_resolution::{
+        SparseQuery, SparseResolveResult, interpolate_samples, resolve_sparse_value,
+    },
 };
 
 /// Provenance information for resolved values.
@@ -268,19 +271,28 @@ impl Stage {
         let opinions = index.opinions_by_field.get(&field)?;
         let strongest = opinions.first()?;
 
-        match &strongest.value {
-            FieldValue::Value(Value::Blocked) => {
-                // Value block: suppress all weaker opinions, return no value.
-                // Spec: AOUSD Core §12.3 (value blocking).
-                None
-            }
-            FieldValue::Value(Value::Array(_)) | FieldValue::Value(Value::ArrayEdit(_)) => {
-                let property_type = index.property_type_for(&field);
-                resolve_array_value_chain(opinions, None, property_type).map(|value| Resolved {
+        if matches!(strongest.value, FieldValue::Value(Value::Blocked)) {
+            // Value block: suppress all weaker opinions, return no value.
+            // Spec: AOUSD Core §12.3 (value blocking).
+            return None;
+        }
+
+        match resolve_sparse_value(
+            opinions,
+            SparseQuery::Default { fallback: None },
+            index.property_type_for(&field),
+        ) {
+            SparseResolveResult::Resolved(value) => {
+                return Some(Resolved {
                     value: ResolvedValue::Scalar(value),
                     provenance: self.provenance_for(field, strongest),
-                })
+                });
             }
+            SparseResolveResult::Blocked => return None,
+            SparseResolveResult::NotApplicable => {}
+        }
+
+        match &strongest.value {
             FieldValue::Value(Value::Dictionary(_)) => {
                 // Dictionary combining: merge all dictionary opinions.
                 // Spec: AOUSD Core §6.6.2.1, §12.2.5.
@@ -350,16 +362,19 @@ impl Stage {
         let index = self.prims.get(&prim)?;
         let opinions = index.opinions_by_field.get(&field)?;
 
-        if opinions.iter().any(opinion_can_yield_array_family) {
-            let property_type = index.property_type_for(&field);
-            if let Some(value) =
-                resolve_array_value_at_time_chain(opinions, time, interp, property_type)
-            {
+        match resolve_sparse_value(
+            opinions,
+            SparseQuery::AtTime { time, interp },
+            index.property_type_for(&field),
+        ) {
+            SparseResolveResult::Resolved(value) => {
                 return Some(Resolved {
                     value,
                     provenance: self.provenance_for(field, opinions.first()?),
                 });
             }
+            SparseResolveResult::Blocked => return None,
+            SparseResolveResult::NotApplicable => {}
         }
 
         // Per §12.3: check each spec in strength order for timeSamples first,
@@ -582,25 +597,31 @@ impl Stage {
             let strongest = opinions.first()?;
             if matches!(strongest.value, FieldValue::Value(Value::Blocked)) {
                 // fall through to schema fallback
-            } else if matches!(
-                strongest.value,
-                FieldValue::Value(Value::Array(_)) | FieldValue::Value(Value::ArrayEdit(_))
-            ) {
+            } else {
                 let property_type = self.prims.get(&prim)?.property_type_for(&field);
                 let fallback_value = match fallback.as_ref() {
-                    Some(FieldValue::Value(value)) if is_array_family_value(value) => Some(value),
+                    Some(FieldValue::Value(value)) => Some(value),
                     _ => None,
                 };
-                if let Some(value) =
-                    resolve_array_value_chain(opinions, fallback_value, property_type)
-                {
-                    return Some(Resolved {
-                        value: ResolvedValue::Scalar(value),
-                        provenance: self.provenance_for(field, strongest),
-                    });
+                match resolve_sparse_value(
+                    opinions,
+                    SparseQuery::Default {
+                        fallback: fallback_value,
+                    },
+                    property_type,
+                ) {
+                    SparseResolveResult::Resolved(value) => {
+                        return Some(Resolved {
+                            value: ResolvedValue::Scalar(value),
+                            provenance: self.provenance_for(field, strongest),
+                        });
+                    }
+                    SparseResolveResult::Blocked => {}
+                    SparseResolveResult::NotApplicable => {}
                 }
-            } else if let Some(resolved) = self.resolve_value(prim, field) {
-                return Some(resolved);
+                if let Some(resolved) = self.resolve_value(prim, field) {
+                    return Some(resolved);
+                }
             }
         }
 
@@ -714,209 +735,6 @@ impl Iterator for Traverse<'_> {
         }
         Some(next)
     }
-}
-
-/// Interpolates a value from sorted timeSamples at the given time.
-///
-/// Spec: AOUSD Core §12.5 (interpolation methods).
-fn interpolate_samples(
-    samples: &[(f64, Value)],
-    time: f64,
-    interp: InterpolationType,
-) -> Option<Value> {
-    if samples.is_empty() {
-        return None;
-    }
-
-    // Binary search for the bracketing samples.
-    match samples
-        .binary_search_by(|(t, _)| t.partial_cmp(&time).unwrap_or(core::cmp::Ordering::Equal))
-    {
-        // Exact match.
-        Ok(idx) => Some(samples[idx].1.clone()),
-        // Between or outside samples.
-        Err(idx) => {
-            if idx == 0 {
-                // Before first sample: return first sample's value.
-                Some(samples[0].1.clone())
-            } else if idx >= samples.len() {
-                // After last sample: return last sample's value.
-                Some(samples.last().unwrap().1.clone())
-            } else {
-                // Between two samples.
-                match interp {
-                    InterpolationType::Held => {
-                        // Step function: return the earlier sample's value.
-                        Some(samples[idx - 1].1.clone())
-                    }
-                    InterpolationType::Linear => lerp_values(
-                        &samples[idx - 1].1,
-                        &samples[idx].1,
-                        samples[idx - 1].0,
-                        samples[idx].0,
-                        time,
-                    ),
-                }
-            }
-        }
-    }
-}
-
-/// Linear interpolation between two values. Falls back to held for
-/// non-numeric types.
-fn lerp_values(a: &Value, b: &Value, t_a: f64, t_b: f64, t: f64) -> Option<Value> {
-    let alpha = if (t_b - t_a).abs() < f64::EPSILON {
-        0.0
-    } else {
-        (t - t_a) / (t_b - t_a)
-    };
-
-    match (a, b) {
-        (Value::Double(va), Value::Double(vb)) => Some(Value::Double(va + (vb - va) * alpha)),
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "f64→f32 intentional for single-precision lerp"
-        )]
-        (Value::Float(va), Value::Float(vb)) => {
-            let alpha_f = alpha as f32;
-            Some(Value::Float(va + (vb - va) * alpha_f))
-        }
-        (Value::TimeCode(va), Value::TimeCode(vb)) => Some(Value::TimeCode(va + (vb - va) * alpha)),
-        (Value::Int64(va), Value::Int64(vb)) => {
-            let result = *va as f64 + (*vb as f64 - *va as f64) * alpha;
-            #[allow(clippy::cast_possible_truncation, reason = "clamped by f64 range")]
-            let i = lerp_round(result) as i64;
-            Some(Value::Int64(i))
-        }
-        (Value::Int(va), Value::Int(vb)) => {
-            let result = *va as f64 + (*vb as f64 - *va as f64) * alpha;
-            #[allow(clippy::cast_possible_truncation, reason = "clamped by f64 range")]
-            let i = lerp_round(result) as i32;
-            Some(Value::Int(i))
-        }
-        // Non-interpolable types fall back to held (earlier sample).
-        _ => Some(a.clone()),
-    }
-}
-
-/// Round-to-nearest for lerp results (no_std-compatible).
-fn lerp_round(v: f64) -> f64 {
-    if v >= 0.0 { v + 0.5 } else { v - 0.5 }
-}
-
-fn resolve_array_value_chain(
-    opinions: &[Opinion],
-    fallback: Option<&Value>,
-    property_type: Option<&crate::property::PropertyType>,
-) -> Option<Value> {
-    let mut acc: Option<Value> = None;
-
-    for opinion in opinions {
-        match &opinion.value {
-            FieldValue::Value(Value::Blocked) => return None,
-            FieldValue::Value(value) if is_array_family_value(value) => {
-                acc = match acc {
-                    Some(strong) => compose_array_value_over(&strong, value.clone(), property_type),
-                    None => Some(value.clone()),
-                };
-                if matches!(acc, Some(Value::Array(_))) {
-                    break;
-                }
-            }
-            FieldValue::Value(_) => break,
-            _ => {}
-        }
-    }
-
-    if let Some(fallback) = fallback
-        && !matches!(acc, Some(Value::Array(_)))
-    {
-        acc = match acc {
-            Some(strong) => compose_array_value_over(&strong, fallback.clone(), property_type),
-            None => Some(fallback.clone()),
-        };
-    }
-
-    materialize_array_value(acc, property_type)
-}
-
-fn resolve_array_value_at_time_chain(
-    opinions: &[Opinion],
-    time: f64,
-    interp: InterpolationType,
-    property_type: Option<&crate::property::PropertyType>,
-) -> Option<Value> {
-    let mut acc: Option<Value> = None;
-
-    for opinion in opinions {
-        let weak = match &opinion.value {
-            FieldValue::Value(Value::Blocked) => return None,
-            FieldValue::Value(value) if is_array_family_value(value) => Some(value.clone()),
-            FieldValue::TimeSamples(samples) => {
-                let mapped_time = opinion.layer_offset.map_time(time);
-                interpolate_samples(samples, mapped_time, interp).filter(is_array_family_value)
-            }
-            _ => None,
-        };
-
-        let Some(weak) = weak else {
-            continue;
-        };
-
-        acc = match acc {
-            Some(strong) => compose_array_value_over(&strong, weak, property_type),
-            None => Some(weak),
-        };
-
-        if matches!(acc, Some(Value::Array(_))) {
-            break;
-        }
-    }
-
-    materialize_array_value(acc, property_type)
-}
-
-fn compose_array_value_over(
-    strong: &Value,
-    weak: Value,
-    property_type: Option<&crate::property::PropertyType>,
-) -> Option<Value> {
-    match (strong, weak) {
-        (Value::Array(items), _) => Some(Value::Array(items.clone())),
-        (Value::ArrayEdit(edit), Value::Array(items)) => {
-            Some(Value::Array(edit.compose_over_array(&items, property_type)))
-        }
-        (Value::ArrayEdit(edit), Value::ArrayEdit(weak_edit)) => {
-            Some(Value::ArrayEdit(edit.compose_over(&weak_edit)))
-        }
-        _ => None,
-    }
-}
-
-fn materialize_array_value(
-    value: Option<Value>,
-    property_type: Option<&crate::property::PropertyType>,
-) -> Option<Value> {
-    match value {
-        Some(Value::ArrayEdit(edit)) => {
-            Some(Value::Array(edit.compose_over_array(&[], property_type)))
-        }
-        other => other,
-    }
-}
-
-fn opinion_can_yield_array_family(opinion: &Opinion) -> bool {
-    match &opinion.value {
-        FieldValue::Value(value) => is_array_family_value(value),
-        FieldValue::TimeSamples(samples) => samples
-            .iter()
-            .any(|(_, value)| is_array_family_value(value)),
-        _ => false,
-    }
-}
-
-fn is_array_family_value(value: &Value) -> bool {
-    matches!(value, Value::Array(_) | Value::ArrayEdit(_))
 }
 
 /// Convert a spline evaluation result to the appropriate [`Value`] type

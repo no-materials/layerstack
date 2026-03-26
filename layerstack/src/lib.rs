@@ -36,6 +36,7 @@ pub mod property;
 pub mod schema;
 pub mod spline;
 pub mod stage;
+mod value_resolution;
 
 pub mod live_stage;
 
