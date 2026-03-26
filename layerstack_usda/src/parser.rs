@@ -77,6 +77,18 @@ impl<'a> Parser<'a> {
         self.current().map_or("", |t| t.text(self.source))
     }
 
+    /// Returns the kind of the next non-trivia token after the current token.
+    fn next_non_trivia_kind(&self) -> Option<TokenKind> {
+        let mut idx = self.pos + 1;
+        while let Some(token) = self.tokens.get(idx) {
+            if !is_trivia(token.kind) {
+                return Some(token.kind);
+            }
+            idx += 1;
+        }
+        None
+    }
+
     /// Advances past the current token, emitting it to the CST builder.
     fn bump(&mut self) -> Option<Token> {
         let tok = self.tokens.get(self.pos).copied();
@@ -1264,7 +1276,13 @@ impl<'a> Parser<'a> {
                 self.parse_dictionary_value();
             }
             Some(TokenKind::Ident) => {
-                self.bump(); // true/false/None/inf/nan/identifier
+                if self.current_text() == "edit"
+                    && self.next_non_trivia_kind() == Some(TokenKind::LeftParen)
+                {
+                    self.parse_array_edit_value();
+                } else {
+                    self.bump(); // true/false/None/inf/nan/identifier
+                }
             }
             _ => {
                 let span = self.current_span();
@@ -1305,6 +1323,101 @@ impl<'a> Parser<'a> {
             }
             self.parse_value_expr();
             self.eat(TokenKind::Comma);
+        }
+        self.expect(TokenKind::RightBracket);
+        let end = self.current_span().start;
+        self.builder.finish_node(end);
+    }
+
+    fn parse_array_edit_value(&mut self) {
+        let start = self.current_span().start;
+        self.builder.start_node(SyntaxKind::ArrayEditValue, start);
+        self.bump(); // `edit`
+        self.expect(TokenKind::LeftParen);
+
+        loop {
+            self.eat_trivia();
+            if self.peek() == Some(TokenKind::RightParen) || self.current().is_none() {
+                break;
+            }
+            self.parse_array_edit_instruction();
+            self.eat(TokenKind::Comma);
+        }
+
+        self.expect(TokenKind::RightParen);
+        let end = self.current_span().start;
+        self.builder.finish_node(end);
+    }
+
+    fn parse_array_edit_instruction(&mut self) {
+        let start = self.current_span().start;
+        self.builder
+            .start_node(SyntaxKind::ArrayEditInstruction, start);
+
+        self.eat_trivia();
+        let keyword = self.current_text();
+        if self.peek() == Some(TokenKind::Ident) {
+            self.bump();
+        }
+
+        match keyword {
+            "write" => {
+                self.parse_array_edit_operand();
+                self.eat_trivia();
+                if self.peek() == Some(TokenKind::Ident) && self.current_text() == "to" {
+                    self.bump();
+                }
+                self.parse_array_edit_index();
+            }
+            "insert" => {
+                self.parse_array_edit_operand();
+                self.eat_trivia();
+                if self.peek() == Some(TokenKind::Ident) && self.current_text() == "at" {
+                    self.bump();
+                }
+                self.parse_array_edit_index();
+            }
+            "prepend" | "append" => {
+                self.parse_array_edit_operand();
+            }
+            "erase" => {
+                self.parse_array_edit_index();
+            }
+            "minsize" | "maxsize" | "resize" => {
+                self.eat_trivia();
+                if matches!(self.peek(), Some(TokenKind::Number | TokenKind::Minus)) {
+                    self.parse_value_expr();
+                }
+            }
+            _ => {}
+        }
+
+        let end = self.current_span().start;
+        self.builder.finish_node(end);
+    }
+
+    fn parse_array_edit_operand(&mut self) {
+        self.eat_trivia();
+        if self.peek() == Some(TokenKind::LeftBracket) {
+            self.parse_array_edit_index();
+        } else {
+            self.parse_value_expr();
+        }
+    }
+
+    fn parse_array_edit_index(&mut self) {
+        let start = self.current_span().start;
+        self.builder.start_node(SyntaxKind::ArrayEditIndex, start);
+        self.expect(TokenKind::LeftBracket);
+        self.eat_trivia();
+        if self.peek() == Some(TokenKind::Minus) {
+            self.bump();
+        }
+        self.eat_trivia();
+        if self.peek() == Some(TokenKind::Number)
+            || (self.peek() == Some(TokenKind::Ident) && self.current_text() == "end")
+        {
+            self.bump();
         }
         self.expect(TokenKind::RightBracket);
         let end = self.current_span().start;

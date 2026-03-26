@@ -19,12 +19,16 @@ use alloc::vec::Vec;
 
 use layerstack::doc::{
     FieldValue, Layer, LayerId, LayerOffset, PrimSpec, Reference, Specifier, SublayerEntry, Value,
-    VariantSpec, get_field_mut, insert_field_if_absent, set_field_vec,
+    VariantSpec, get_field_mut, insert_field_if_absent, insert_property_field_if_absent,
+    set_field_vec, set_property_field_vec,
 };
 use layerstack::interner::{TokenId, TokenInterner};
 use layerstack::listop::ListOp;
 use layerstack::path::{Path, PathId, PathInterner};
-use layerstack::{AssetResolver, ResolvedAsset};
+use layerstack::{
+    ArrayEdit, ArrayEditOp, ArrayEditOperand, ArrayIndex, AssetResolver, PropertyType,
+    ResolvedAsset,
+};
 
 use crate::ast;
 use crate::diagnostic::Diagnostic;
@@ -288,6 +292,7 @@ impl EmitCtx<'_> {
 
     fn emit_attribute(&mut self, attr: &ast::Attribute<'_>, spec: &mut PrimSpec) {
         let name_tok = self.tokens.intern(attr.name);
+        let property_type = self.declared_property_type(attr.type_name, attr.is_array);
 
         // Connection: stored as a PathListOp under the attribute name.
         if let Some(conn) = &attr.connection {
@@ -297,7 +302,12 @@ impl EmitCtx<'_> {
             {
                 merge_path_listop(existing, listop);
             } else {
-                set_field_vec(&mut spec.fields, name_tok, FieldValue::PathListOp(listop));
+                set_property_field_vec(
+                    &mut spec.fields,
+                    name_tok,
+                    FieldValue::PathListOp(listop),
+                    property_type.clone(),
+                );
             }
             return;
         }
@@ -311,17 +321,32 @@ impl EmitCtx<'_> {
                     Some((s.time, self.convert_value(val, attr.type_name)))
                 })
                 .collect();
-            set_field_vec(&mut spec.fields, name_tok, FieldValue::TimeSamples(ts));
+            set_property_field_vec(
+                &mut spec.fields,
+                name_tok,
+                FieldValue::TimeSamples(ts),
+                property_type.clone(),
+            );
             return;
         }
 
         // Default value.
         if let Some(val) = &attr.default {
             let converted = self.convert_value(val, attr.type_name);
-            set_field_vec(&mut spec.fields, name_tok, FieldValue::Value(converted));
+            set_property_field_vec(
+                &mut spec.fields,
+                name_tok,
+                FieldValue::Value(converted),
+                property_type,
+            );
         } else {
             // Attribute declaration with no value — register as Null.
-            insert_field_if_absent(&mut spec.fields, name_tok, FieldValue::Value(Value::Null));
+            insert_property_field_if_absent(
+                &mut spec.fields,
+                name_tok,
+                FieldValue::Value(Value::Null),
+                property_type,
+            );
         }
     }
 
@@ -400,6 +425,8 @@ impl EmitCtx<'_> {
                 match child {
                     ast::PrimChild::Attribute(attr) => {
                         let attr_tok = self.tokens.intern(attr.name);
+                        let property_type =
+                            self.declared_property_type(attr.type_name, attr.is_array);
 
                         if let Some(conn) = &attr.connection {
                             let listop = self.emit_connection_listop(conn);
@@ -408,10 +435,11 @@ impl EmitCtx<'_> {
                             {
                                 merge_path_listop(existing, listop);
                             } else {
-                                set_field_vec(
+                                set_property_field_vec(
                                     &mut variant_spec.fields,
                                     attr_tok,
                                     FieldValue::PathListOp(listop),
+                                    property_type.clone(),
                                 );
                             }
                         } else if let Some(samples) = &attr.time_samples {
@@ -422,23 +450,26 @@ impl EmitCtx<'_> {
                                     Some((s.time, self.convert_value(val, attr.type_name)))
                                 })
                                 .collect();
-                            set_field_vec(
+                            set_property_field_vec(
                                 &mut variant_spec.fields,
                                 attr_tok,
                                 FieldValue::TimeSamples(ts),
+                                property_type.clone(),
                             );
                         } else if let Some(val) = &attr.default {
                             let converted = self.convert_value(val, attr.type_name);
-                            set_field_vec(
+                            set_property_field_vec(
                                 &mut variant_spec.fields,
                                 attr_tok,
                                 FieldValue::Value(converted),
+                                property_type,
                             );
                         } else {
-                            insert_field_if_absent(
+                            insert_property_field_if_absent(
                                 &mut variant_spec.fields,
                                 attr_tok,
                                 FieldValue::Value(Value::Null),
+                                property_type,
                             );
                         }
                     }
@@ -770,6 +801,7 @@ impl EmitCtx<'_> {
             match child_child {
                 ast::PrimChild::Attribute(attr) => {
                     let attr_tok = self.tokens.intern(attr.name);
+                    let property_type = self.declared_property_type(attr.type_name, attr.is_array);
                     if let Some(conn) = &attr.connection {
                         let listop = self.emit_connection_listop(conn);
                         if let Some(FieldValue::PathListOp(existing)) =
@@ -777,7 +809,12 @@ impl EmitCtx<'_> {
                         {
                             merge_path_listop(existing, listop);
                         } else {
-                            set_field_vec(child_fields, attr_tok, FieldValue::PathListOp(listop));
+                            set_property_field_vec(
+                                child_fields,
+                                attr_tok,
+                                FieldValue::PathListOp(listop),
+                                property_type.clone(),
+                            );
                         }
                     } else if let Some(samples) = &attr.time_samples {
                         let ts: Vec<(f64, Value)> = samples
@@ -787,15 +824,26 @@ impl EmitCtx<'_> {
                                 Some((s.time, self.convert_value(val, attr.type_name)))
                             })
                             .collect();
-                        set_field_vec(child_fields, attr_tok, FieldValue::TimeSamples(ts));
+                        set_property_field_vec(
+                            child_fields,
+                            attr_tok,
+                            FieldValue::TimeSamples(ts),
+                            property_type.clone(),
+                        );
                     } else if let Some(val) = &attr.default {
                         let converted = self.convert_value(val, attr.type_name);
-                        set_field_vec(child_fields, attr_tok, FieldValue::Value(converted));
+                        set_property_field_vec(
+                            child_fields,
+                            attr_tok,
+                            FieldValue::Value(converted),
+                            property_type,
+                        );
                     } else {
-                        insert_field_if_absent(
+                        insert_property_field_if_absent(
                             child_fields,
                             attr_tok,
                             FieldValue::Value(Value::Null),
+                            property_type,
                         );
                     }
                 }
@@ -1005,6 +1053,15 @@ impl EmitCtx<'_> {
         listop
     }
 
+    fn declared_property_type(&mut self, type_hint: &str, is_array: bool) -> PropertyType {
+        let base = type_hint.strip_suffix("[]").unwrap_or(type_hint);
+        PropertyType::new(
+            type_hint,
+            is_array,
+            default_scalar_for_type(base, self.tokens),
+        )
+    }
+
     // ── Value conversion ────────────────────────────────────────────
 
     fn convert_value(&mut self, val: &ast::Value<'_>, type_hint: &str) -> Value {
@@ -1053,6 +1110,57 @@ impl EmitCtx<'_> {
                     .map(|v| self.convert_value(v, arr_elem_hint))
                     .collect();
                 Value::Array(elements)
+            }
+            ast::Value::ArrayEdit(edit) => {
+                let element_hint = type_hint.strip_suffix("[]").unwrap_or(type_hint);
+                Value::ArrayEdit(self.convert_array_edit(edit, element_hint))
+            }
+        }
+    }
+
+    fn convert_array_edit(&mut self, edit: &ast::ArrayEdit<'_>, element_hint: &str) -> ArrayEdit {
+        let ops = edit
+            .instructions
+            .iter()
+            .map(|instruction| self.convert_array_edit_instruction(instruction, element_hint))
+            .collect();
+        ArrayEdit { ops }
+    }
+
+    fn convert_array_edit_instruction(
+        &mut self,
+        instruction: &ast::ArrayEditInstruction<'_>,
+        element_hint: &str,
+    ) -> ArrayEditOp {
+        match instruction {
+            ast::ArrayEditInstruction::Write { src, index } => ArrayEditOp::Write {
+                src: self.convert_array_edit_operand(src, element_hint),
+                index: convert_array_edit_index(*index),
+            },
+            ast::ArrayEditInstruction::Insert { src, index } => ArrayEditOp::Insert {
+                src: self.convert_array_edit_operand(src, element_hint),
+                index: convert_array_edit_index(*index),
+            },
+            ast::ArrayEditInstruction::Erase { index } => ArrayEditOp::Erase {
+                index: convert_array_edit_index(*index),
+            },
+            ast::ArrayEditInstruction::MinSize(len) => ArrayEditOp::MinSize { len: *len },
+            ast::ArrayEditInstruction::MaxSize(len) => ArrayEditOp::MaxSize { len: *len },
+            ast::ArrayEditInstruction::Resize(len) => ArrayEditOp::Resize { len: *len },
+        }
+    }
+
+    fn convert_array_edit_operand(
+        &mut self,
+        operand: &ast::ArrayEditOperand<'_>,
+        element_hint: &str,
+    ) -> ArrayEditOperand {
+        match operand {
+            ast::ArrayEditOperand::Literal(value) => {
+                ArrayEditOperand::Literal(self.convert_value(value, element_hint))
+            }
+            ast::ArrayEditOperand::CopyFrom(index) => {
+                ArrayEditOperand::CopyFrom(convert_array_edit_index(*index))
             }
         }
     }
@@ -1463,6 +1571,66 @@ fn has_ref_content(listop: &ListOp<Reference>) -> bool {
 
 fn has_path_content(listop: &ListOp<PathId>) -> bool {
     listop.explicit.is_some() || !listop.prepend.is_empty() || !listop.append.is_empty()
+}
+
+fn convert_array_edit_index(index: ast::ArrayEditIndex) -> ArrayIndex {
+    match index {
+        ast::ArrayEditIndex::Position(value) => ArrayIndex::Position(value),
+        ast::ArrayEditIndex::End => ArrayIndex::End,
+    }
+}
+
+fn default_scalar_for_type(type_hint: &str, tokens: &mut TokenInterner) -> Value {
+    match type_hint {
+        "bool" => Value::Bool(false),
+        "uchar" => Value::UChar(0),
+        "int" => Value::Int(0),
+        "uint" => Value::UInt(0),
+        "int64" => Value::Int64(0),
+        "uint64" => Value::UInt64(0),
+        "half" => Value::Half(0),
+        "float" => Value::Float(0.0),
+        "double" => Value::Double(0.0),
+        "string" => Value::String(Arc::from("")),
+        "token" => Value::Token(tokens.intern("")),
+        "asset" => Value::Asset(Arc::from("")),
+        "timecode" => Value::TimeCode(0.0),
+        "double2" => Value::Vec2d([0.0; 2]),
+        "double3" => Value::Vec3d([0.0; 3]),
+        "double4" => Value::Vec4d([0.0; 4]),
+        "float2" => Value::Vec2f([0.0; 2]),
+        "float3" => Value::Vec3f([0.0; 3]),
+        "float4" => Value::Vec4f([0.0; 4]),
+        "half2" => Value::Vec2h([0; 2]),
+        "half3" => Value::Vec3h([0; 3]),
+        "half4" => Value::Vec4h([0; 4]),
+        "int2" => Value::Vec2i([0; 2]),
+        "int3" => Value::Vec3i([0; 3]),
+        "int4" => Value::Vec4i([0; 4]),
+        "matrix2d" => Value::Matrix2d(Box::new([0.0; 4])),
+        "matrix3d" => Value::Matrix3d(Box::new([0.0; 9])),
+        "matrix4d" => Value::Matrix4d(Box::new([0.0; 16])),
+        "quatd" => Value::Quatd([0.0; 4]),
+        "quatf" => Value::Quatf([0.0; 4]),
+        "quath" => Value::Quath([0; 4]),
+        "dictionary" => Value::Dictionary(Vec::new()),
+        base if is_semantic_vec_alias(base, 'f') => match semantic_component_count(base) {
+            2 => Value::Vec2f([0.0; 2]),
+            3 => Value::Vec3f([0.0; 3]),
+            _ => Value::Vec4f([0.0; 4]),
+        },
+        base if is_semantic_vec_alias(base, 'd') => match semantic_component_count(base) {
+            2 => Value::Vec2d([0.0; 2]),
+            3 => Value::Vec3d([0.0; 3]),
+            _ => Value::Vec4d([0.0; 4]),
+        },
+        base if is_semantic_vec_alias(base, 'h') => match semantic_component_count(base) {
+            2 => Value::Vec2h([0; 2]),
+            3 => Value::Vec3h([0; 3]),
+            _ => Value::Vec4h([0; 4]),
+        },
+        _ => Value::Null,
+    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────
@@ -2406,5 +2574,41 @@ def \"A\" {
             *field,
             FieldValue::Value(Value::Quatf([0.0, 0.0, 0.0, 1.0]))
         );
+    }
+
+    #[test]
+    fn emit_array_edit_value() {
+        let src =
+            "#usda 1.0\ndef \"A\" {\n    int[] x = edit (write 3 to [0], append 4, resize 3)\n}\n";
+        let (result, mut tokens, paths) = emit_source(src);
+        let a_path = Path::parse_absolute("/A", &mut tokens).unwrap();
+        let a_id = paths.lookup(&a_path).expect("/A");
+        let spec = result.layer.prims.get(&a_id).unwrap();
+        let x_tok = tokens.intern("x");
+        let entry = spec
+            .fields
+            .iter()
+            .find(|entry| entry.name == x_tok)
+            .unwrap();
+
+        match &entry.value {
+            FieldValue::Value(Value::ArrayEdit(edit)) => {
+                assert_eq!(edit.ops.len(), 3);
+                assert!(matches!(edit.ops[0], ArrayEditOp::Write { .. }));
+                assert!(matches!(
+                    edit.ops[1],
+                    ArrayEditOp::Insert {
+                        index: ArrayIndex::End,
+                        ..
+                    }
+                ));
+                assert!(matches!(edit.ops[2], ArrayEditOp::Resize { len: 3 }));
+            }
+            other => panic!("expected array edit value, got {other:?}"),
+        }
+
+        let property_type = entry.property_type.as_ref().expect("property type");
+        assert!(property_type.is_array);
+        assert_eq!(property_type.default_scalar, Value::Int(0));
     }
 }

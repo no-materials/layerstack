@@ -255,10 +255,67 @@ pub enum Value<'a> {
     Tuple(Vec<Self>),
     /// An array/list value: `[1, 2, 3]`.
     Array(Vec<Self>),
+    /// A sparse array edit value: `edit (...)`.
+    ArrayEdit(ArrayEdit<'a>),
     /// A dictionary: `{ "key": "value", ... }`.
     Dictionary(Vec<DictionaryEntry<'a>>),
     /// Blocked value (`None` keyword).
     Blocked,
+}
+
+/// A sparse array edit value.
+#[derive(Debug)]
+pub struct ArrayEdit<'a> {
+    /// Instructions applied in order.
+    pub instructions: Vec<ArrayEditInstruction<'a>>,
+}
+
+/// A sparse array edit instruction.
+#[derive(Debug)]
+pub enum ArrayEditInstruction<'a> {
+    /// `write value to [index]`
+    Write {
+        /// Source operand.
+        src: ArrayEditOperand<'a>,
+        /// Destination index.
+        index: ArrayEditIndex,
+    },
+    /// `insert value at [index]`
+    Insert {
+        /// Source operand.
+        src: ArrayEditOperand<'a>,
+        /// Insertion index.
+        index: ArrayEditIndex,
+    },
+    /// `erase [index]`
+    Erase {
+        /// Erased index.
+        index: ArrayEditIndex,
+    },
+    /// `minsize N`
+    MinSize(usize),
+    /// `maxsize N`
+    MaxSize(usize),
+    /// `resize N`
+    Resize(usize),
+}
+
+/// A sparse array edit operand.
+#[derive(Debug)]
+pub enum ArrayEditOperand<'a> {
+    /// A literal element value.
+    Literal(Value<'a>),
+    /// Copy the array element currently stored at `index`.
+    CopyFrom(ArrayEditIndex),
+}
+
+/// An array edit index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArrayEditIndex {
+    /// Numeric position, including negative indexing.
+    Position(i64),
+    /// The index past the final element.
+    End,
 }
 
 /// A dictionary entry.

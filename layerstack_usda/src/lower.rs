@@ -946,6 +946,9 @@ impl<'a> LowerCtx<'a> {
             SyntaxKind::PathRef => Value::Path(self.lower_path_ref(self.node_from(tree, id))),
             SyntaxKind::TupleValue => Value::Tuple(self.lower_tuple(self.node_from(tree, id))),
             SyntaxKind::ArrayValue => Value::Array(self.lower_array(self.node_from(tree, id))),
+            SyntaxKind::ArrayEditValue => {
+                Value::ArrayEdit(self.lower_array_edit(self.node_from(tree, id)))
+            }
             SyntaxKind::DictionaryValue => {
                 Value::Dictionary(self.lower_dictionary(self.node_from(tree, id)))
             }
@@ -986,6 +989,143 @@ impl<'a> LowerCtx<'a> {
         ids.iter()
             .map(|id| self.lower_value(self.node_from(tree, *id)))
             .collect()
+    }
+
+    fn lower_array_edit(&mut self, node: SyntaxNode<'_>) -> ArrayEdit<'a> {
+        let tree = node.tree();
+        let instructions = node
+            .children_no_trivia()
+            .filter(|child| child.kind() == SyntaxKind::ArrayEditInstruction)
+            .map(|child| self.lower_array_edit_instruction(self.node_from(tree, child.id.0)))
+            .collect();
+        ArrayEdit { instructions }
+    }
+
+    fn lower_array_edit_instruction(&mut self, node: SyntaxNode<'_>) -> ArrayEditInstruction<'a> {
+        let tree = node.tree();
+        let sig: Vec<_> = node
+            .children_no_trivia()
+            .map(|child| (child.kind(), child.id.0))
+            .collect();
+
+        let keyword = sig
+            .iter()
+            .find_map(|(kind, id)| {
+                (*kind == SyntaxKind::Ident).then(|| self.text(self.node_from(tree, *id)))
+            })
+            .unwrap_or("");
+
+        match keyword {
+            "write" => ArrayEditInstruction::Write {
+                src: self.lower_array_edit_operand(node),
+                index: self
+                    .lower_last_array_edit_index(node)
+                    .unwrap_or(ArrayEditIndex::Position(0)),
+            },
+            "insert" => ArrayEditInstruction::Insert {
+                src: self.lower_array_edit_operand(node),
+                index: self
+                    .lower_last_array_edit_index(node)
+                    .unwrap_or(ArrayEditIndex::Position(0)),
+            },
+            "prepend" => ArrayEditInstruction::Insert {
+                src: self.lower_array_edit_operand(node),
+                index: ArrayEditIndex::Position(0),
+            },
+            "append" => ArrayEditInstruction::Insert {
+                src: self.lower_array_edit_operand(node),
+                index: ArrayEditIndex::End,
+            },
+            "erase" => ArrayEditInstruction::Erase {
+                index: self
+                    .lower_array_edit_index(node)
+                    .unwrap_or(ArrayEditIndex::Position(0)),
+            },
+            "minsize" => ArrayEditInstruction::MinSize(self.lower_array_edit_size(node)),
+            "maxsize" => ArrayEditInstruction::MaxSize(self.lower_array_edit_size(node)),
+            "resize" => ArrayEditInstruction::Resize(self.lower_array_edit_size(node)),
+            _ => ArrayEditInstruction::Resize(0),
+        }
+    }
+
+    fn lower_array_edit_operand(&mut self, node: SyntaxNode<'_>) -> ArrayEditOperand<'a> {
+        let tree = node.tree();
+        for child in node.children_no_trivia() {
+            match child.kind() {
+                SyntaxKind::ArrayEditIndex => {
+                    if let Some(index) =
+                        self.lower_array_edit_index(self.node_from(tree, child.id.0))
+                    {
+                        return ArrayEditOperand::CopyFrom(index);
+                    }
+                }
+                SyntaxKind::ValueExpr => {
+                    return ArrayEditOperand::Literal(
+                        self.lower_value(self.node_from(tree, child.id.0)),
+                    );
+                }
+                _ => {}
+            }
+        }
+        ArrayEditOperand::Literal(Value::Blocked)
+    }
+
+    fn lower_array_edit_index(&mut self, node: SyntaxNode<'_>) -> Option<ArrayEditIndex> {
+        let tree = node.tree();
+        let sig: Vec<_> = node
+            .children_no_trivia()
+            .map(|child| (child.kind(), child.id.0))
+            .collect();
+
+        let mut negative = false;
+        for (kind, id) in sig {
+            match kind {
+                SyntaxKind::ArrayEditIndex => {
+                    return self.lower_array_edit_index(self.node_from(tree, id));
+                }
+                SyntaxKind::Minus => negative = true,
+                SyntaxKind::Number => {
+                    let raw = self.text(self.node_from(tree, id));
+                    let parsed = raw.parse::<i64>().ok()?;
+                    return Some(ArrayEditIndex::Position(if negative {
+                        -parsed
+                    } else {
+                        parsed
+                    }));
+                }
+                SyntaxKind::Ident => {
+                    let text = self.text(self.node_from(tree, id));
+                    if text == "end" {
+                        return Some(ArrayEditIndex::End);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn lower_array_edit_size(&mut self, node: SyntaxNode<'_>) -> usize {
+        let tree = node.tree();
+        node.children_no_trivia()
+            .find(|child| child.kind() == SyntaxKind::ValueExpr)
+            .map(|child| self.lower_value(self.node_from(tree, child.id.0)))
+            .and_then(|value| match value {
+                Value::Int(v) if v >= 0 => usize::try_from(v).ok(),
+                Value::Number(v) if v >= 0.0 => usize::try_from(v as i64).ok(),
+                _ => None,
+            })
+            .unwrap_or(0)
+    }
+
+    fn lower_last_array_edit_index(&mut self, node: SyntaxNode<'_>) -> Option<ArrayEditIndex> {
+        let tree = node.tree();
+        let children: Vec<_> = node.children_no_trivia().collect();
+        children
+            .iter()
+            .rev()
+            .find(|child| child.kind() == SyntaxKind::ArrayEditIndex)
+            .and_then(|child| self.lower_array_edit_index(self.node_from(tree, child.id.0)))
     }
 
     fn lower_dictionary(&mut self, node: SyntaxNode<'_>) -> Vec<DictionaryEntry<'a>> {
