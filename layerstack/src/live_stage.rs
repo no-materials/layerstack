@@ -1,7 +1,7 @@
 //! Incremental recomposition via `invalidation`.
 //!
 //! [`LiveStage`] wraps a composed [`Stage`] and owns an
-//! [`InvalidationGraph`] to support scoped recomposition: when a layer's
+//! [`InvalidationTracker`] to support scoped recomposition: when a layer's
 //! opinions change, only the transitively affected prims are recomposed.
 //!
 //! Callers mark roots, and propagation to transitive dependents happens at
@@ -10,7 +10,7 @@
 use alloc::vec::Vec;
 
 use hashbrown::{HashMap, HashSet};
-use invalidation::{Channel, CycleHandling, InvalidationGraph, InvalidationSet};
+use invalidation::{Channel, CycleHandling, InvalidationTracker};
 
 use crate::{
     dependency_map::{ArcDependency, CompositionDeps},
@@ -29,9 +29,9 @@ pub const STRUCTURAL: Channel = Channel::new(1);
 
 /// A mutable composition stage that supports incremental recomposition.
 ///
-/// `LiveStage` owns a fully composed [`Stage`] and an [`InvalidationGraph`]
-/// (the single source of truth for dependency topology). An
-/// [`InvalidationSet`] tracks which prims are dirty.
+/// `LiveStage` owns a fully composed [`Stage`] and an
+/// [`InvalidationTracker`] (the single source of truth for dependency
+/// topology and dirty prim state).
 ///
 /// Notifications use lazy propagation: callers mark roots via
 /// [`notify_layer_edit`](Self::notify_layer_edit) or
@@ -40,16 +40,14 @@ pub const STRUCTURAL: Channel = Channel::new(1);
 #[derive(Debug)]
 pub struct LiveStage {
     stage: Stage,
-    /// The dependency graph: target depends on source in `OPINION_EDIT`.
-    graph: InvalidationGraph<PathId>,
+    /// Tracks dependency topology and dirty prim state.
+    tracker: InvalidationTracker<PathId>,
     /// Arc metadata for incremental edge updates and diagnostics.
     arc_metadata: HashSet<ArcDependency>,
     /// Layer → prims that receive opinions from that layer.
     layer_to_prims: HashMap<LayerId, HashSet<PathId>>,
     /// Prim → layers that contribute opinions to it.
     prim_to_layers: HashMap<PathId, HashSet<LayerId>>,
-    /// Tracks which prims are dirty.
-    invalidated: InvalidationSet<PathId>,
     root: LayerId,
     options: StageOptions,
     needs_full_rebuild: bool,
@@ -64,14 +62,15 @@ impl LiveStage {
         };
         let mut stage = Stage::compose(store, root, opts);
         let deps = stage.take_deps().unwrap_or_default();
+        let tracker =
+            InvalidationTracker::from_graph_with_cycle_handling(deps.graph, CycleHandling::Ignore);
 
         Self {
             stage,
-            graph: deps.graph,
+            tracker,
             arc_metadata: deps.arcs,
             layer_to_prims: deps.layer_to_prims,
             prim_to_layers: deps.prim_to_layers,
-            invalidated: InvalidationSet::new(),
             root,
             options,
             needs_full_rebuild: false,
@@ -86,7 +85,7 @@ impl LiveStage {
     pub fn notify_layer_edit(&mut self, layer: LayerId) {
         if let Some(prims) = self.layer_to_prims.get(&layer) {
             for &prim in prims {
-                self.invalidated.mark(prim, OPINION_EDIT);
+                self.tracker.mark(prim, OPINION_EDIT);
             }
         }
     }
@@ -101,7 +100,7 @@ impl LiveStage {
         if let Some(layer_prims) = self.layer_to_prims.get(&layer) {
             for &prim in prims {
                 if layer_prims.contains(&prim) {
-                    self.invalidated.mark(prim, OPINION_EDIT);
+                    self.tracker.mark(prim, OPINION_EDIT);
                 }
             }
         }
@@ -113,7 +112,7 @@ impl LiveStage {
     /// only the named prim is marked dirty (plus its transitive dependents at
     /// drain time), rather than every prim that receives opinions from the layer.
     pub fn notify_prim_edit(&mut self, prim: PathId) {
-        self.invalidated.mark(prim, OPINION_EDIT);
+        self.tracker.mark(prim, OPINION_EDIT);
     }
 
     /// Batch-marks multiple prims as dirty (any layer).
@@ -122,7 +121,7 @@ impl LiveStage {
     /// each prim, but more convenient for bulk edits.
     pub fn notify_prim_edits(&mut self, prims: &[PathId]) {
         for &prim in prims {
-            self.invalidated.mark(prim, OPINION_EDIT);
+            self.tracker.mark(prim, OPINION_EDIT);
         }
     }
 
@@ -145,20 +144,18 @@ impl LiveStage {
             return self.full_rebuild(store);
         }
 
-        if !self.invalidated.has_invalidated(OPINION_EDIT) {
+        if !self.tracker.has_invalidated(OPINION_EDIT) {
             return Vec::new();
         }
 
         // Drain with lazy expansion: roots → all transitive dependents.
-        let affected: Vec<PathId> =
-            invalidation::drain_affected_sorted(&mut self.invalidated, &self.graph, OPINION_EDIT)
-                .collect();
+        let affected: Vec<PathId> = self.tracker.drain_affected_sorted(OPINION_EDIT).collect();
 
         // Expand the affected set to include arc sources so composition can
         // read inherit/reference targets.
         let mut mask_set: HashSet<PathId> = HashSet::from_iter(affected.iter().copied());
         for &prim in &affected {
-            for dep in self.graph.dependencies(prim, OPINION_EDIT) {
+            for dep in self.tracker.graph().dependencies(prim, OPINION_EDIT) {
                 mask_set.insert(dep);
             }
         }
@@ -192,12 +189,6 @@ impl LiveStage {
         &self.stage
     }
 
-    /// Returns a reference to the dependency graph.
-    #[must_use]
-    pub fn graph(&self) -> &InvalidationGraph<PathId> {
-        &self.graph
-    }
-
     /// Removes all edges involving `prim` (as target) and re-adds them from
     /// the partial composition's dependency data.
     fn update_prim_edges(&mut self, prim: PathId, partial: &CompositionDeps) {
@@ -205,9 +196,13 @@ impl LiveStage {
         self.arc_metadata.retain(|a| a.target != prim);
 
         // Remove old graph edges where prim is the dependent.
-        let old_deps: Vec<PathId> = self.graph.dependencies(prim, OPINION_EDIT).collect();
+        let old_deps: Vec<PathId> = self
+            .tracker
+            .graph()
+            .dependencies(prim, OPINION_EDIT)
+            .collect();
         for dep in old_deps {
-            self.graph.remove_dependency(prim, dep, OPINION_EDIT);
+            self.tracker.remove_dependency(prim, dep, OPINION_EDIT);
         }
 
         // Remove old layer-opinion edges for this prim.
@@ -228,12 +223,9 @@ impl LiveStage {
             .collect();
         for arc in &new_arcs {
             self.arc_metadata.insert(*arc);
-            let _ = self.graph.add_dependency(
-                arc.target,
-                arc.source,
-                OPINION_EDIT,
-                CycleHandling::Ignore,
-            );
+            let _ = self
+                .tracker
+                .add_dependency(arc.target, arc.source, OPINION_EDIT);
         }
 
         // Add new layer-opinion edges from the partial composition.
@@ -251,7 +243,7 @@ impl LiveStage {
 
     fn full_rebuild(&mut self, store: &mut dyn LayerStore) -> Vec<PathId> {
         self.needs_full_rebuild = false;
-        self.invalidated.clear(OPINION_EDIT);
+        self.tracker.clear(OPINION_EDIT);
 
         let opts = StageOptions {
             with_dependencies: true,
@@ -261,7 +253,8 @@ impl LiveStage {
         let deps = stage.take_deps().unwrap_or_default();
 
         self.stage = stage;
-        self.graph = deps.graph;
+        self.tracker =
+            InvalidationTracker::from_graph_with_cycle_handling(deps.graph, CycleHandling::Ignore);
         self.arc_metadata = deps.arcs;
         self.layer_to_prims = deps.layer_to_prims;
         self.prim_to_layers = deps.prim_to_layers;
